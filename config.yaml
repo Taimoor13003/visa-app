@@ -1,0 +1,50 @@
+# Demo monitors. One entry = one route (country + application city + category).
+#
+# steps: what the script does after login to reach the "earliest slot" message.
+#   - click: "button or link text"
+#   - select: {index: 0, option: "visible option text"}   # index = Nth dropdown on page
+#   - select: {label: "Field label", option: "..."}       # or find the dropdown by its label
+#   - wait: 3                                              # seconds
+#   - goto: "https://..."
+# Exact button/option texts must be copied from the live portal. Run
+#   python monitor.py --inspect "<name>"
+# after logging in to see the page text and fix these.
+#
+# extract (optional): CSS selectors to read open calendar dates / time slots
+# when the portal shows a calendar instead of an "earliest slot" sentence.
+
+monitors:
+  - name: "VFS – Pakistan → Netherlands – Islamabad"
+    provider: vfs
+    profile: vfs                       # browser profile folder (keeps the login session)
+    credentials: VFS                   # reads VFS_EMAIL / VFS_PASSWORD from .env
+    category: "Short stay (Schengen) – Tourism"
+    login_url: "https://visa.vfsglobal.com/pak/en/nld/login"
+    start_url: "https://visa.vfsglobal.com/pak/en/nld/dashboard"     # only works once logged in
+    booking_url: "https://visa.vfsglobal.com/pak/en/nld/login"
+    interval_minutes: 15
+    steps:
+      - click: "Start New Booking"
+      - select: {index: 0, option: "Islamabad"}
+      - select: {index: 1, option: "Short Stay"}
+      - select: {index: 2, option: "Tourism"}
+      - wait: 3
+
+  - name: "BLS – Pakistan → Spain – Islamabad"
+    provider: bls
+    profile: bls
+    credentials: BLS                   # reads BLS_EMAIL / BLS_PASSWORD from .env
+    category: "Tourist"
+    login_url: "https://appointment.thespainvisa.com/Global/account/login"
+    start_url: "https://appointment.thespainvisa.com/Global/appointment/newappointment"
+    booking_url: "https://appointment.thespainvisa.com/Global/account/login"
+    interval_minutes: 15
+    steps:
+      - select: {index: 0, option: "Islamabad"}
+      - select: {index: 1, option: "Schengen"}
+      - select: {index: 2, option: "Tourist"}
+      - click: "Submit"
+      - wait: 4
+    extract:
+      dates: null      # e.g. "td.day:not(.disabled)" once you see the calendar HTML
+      times: null      # e.g. "#AppointmentSlot option"

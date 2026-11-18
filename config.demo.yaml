@@ -1,0 +1,39 @@
+# Demo config: same routes as config.yaml, but pointed at the local stand-in portal
+# (demo_portal/app.py) so the demo runs from anywhere — the real BLS/VFS portals only
+# answer from Pakistan. Start everything with:   python app.py --demo
+#
+# Nothing in the monitor changes between this file and config.yaml: same login typing,
+# same step engine, same scrapers/*.py parsing, same confirm-then-alert logic.
+
+monitors:
+  - name: "VFS – Pakistan → Netherlands – Islamabad"
+    provider: vfs
+    profile: demo_vfs
+    credentials: DEMO                  # DEMO_EMAIL / DEMO_PASSWORD from .env
+    category: "Short stay (Schengen) – Tourism"
+    login_url: "http://127.0.0.1:8010/vfs/login"
+    start_url: "http://127.0.0.1:8010/vfs/dashboard"
+    booking_url: "http://127.0.0.1:8010/vfs/login"
+    interval_minutes: 5
+    steps:
+      - click: "Start New Booking"
+      - select: {index: 0, option: "Islamabad"}
+      - select: {index: 1, option: "Short Stay"}
+      - select: {index: 2, option: "Tourism"}
+      - wait: 1
+
+  - name: "BLS – Pakistan → Spain – Islamabad"
+    provider: bls
+    profile: demo_bls
+    credentials: DEMO
+    category: "Tourist"
+    login_url: "http://127.0.0.1:8010/bls/account/login"
+    start_url: "http://127.0.0.1:8010/bls/appointment/newappointment"
+    booking_url: "http://127.0.0.1:8010/bls/account/login"
+    interval_minutes: 5
+    steps:
+      - select: {index: 0, option: "Islamabad"}
+      - select: {index: 1, option: "Schengen"}
+      - select: {index: 2, option: "Tourist"}
+      - click: "Submit"
+      - wait: 1

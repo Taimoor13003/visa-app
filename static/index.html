@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visa Slot Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f5f7fb;--panel:#ffffff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+  --brand:#1d4ed8;--brand-soft:#dbeafe;--ok:#059669;--ok-soft:#d1fae5;--warn:#d97706;--warn-soft:#fef3c7;
+  --bad:#dc2626;--bad-soft:#fee2e2;--idle:#94a3b8;--console:#0b1220;--console-ink:#cbd5e1;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0b1020;--panel:#121a2e;--ink:#e2e8f0;--muted:#94a3b8;--line:#1f2a44;
+  --brand:#60a5fa;--brand-soft:#172554;--ok:#34d399;--ok-soft:#064e3b;--warn:#fbbf24;--warn-soft:#451a03;
+  --bad:#f87171;--bad-soft:#450a0a;--idle:#64748b;--console:#060a14;--console-ink:#cbd5e1;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,system-ui,sans-serif}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:5}
+.logo{width:34px;height:34px;border-radius:9px;background:var(--brand);display:grid;place-items:center;color:#fff;font-weight:700}
+h1{font-size:17px;margin:0}
+.sub{color:var(--muted);font-size:12px}
+.live{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 var(--ok);animation:pulse 1.6s infinite}
+.dot.off{background:var(--bad);animation:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 60%,transparent)}100%{box-shadow:0 0 0 10px transparent}}
+main{max-width:1240px;margin:0 auto;padding:22px 16px 40px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat b{display:block;font-size:24px;font-weight:700}
+.stat span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:22px 0 10px}
+.routes{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px;transition:border-color .3s}
+.card.found{border-color:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.name{font-weight:600;font-size:15px}
+.meta{color:var(--muted);font-size:12px}
+.pill{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.s-stopped{background:var(--line);color:var(--muted)}
+.s-starting,.s-checking{background:var(--brand-soft);color:var(--brand)}
+.s-checking i,.s-starting i{animation:blink .8s infinite}
+.s-running{background:var(--ok-soft);color:var(--ok)}
+.s-waiting_login{background:var(--warn-soft);color:var(--warn)}
+@keyframes blink{50%{opacity:.2}}
+.slot{border-radius:10px;padding:12px 14px;background:var(--bg);border:1px dashed var(--line)}
+.slot .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.slot .val{font-size:20px;font-weight:700;margin-top:2px}
+.slot.ok{background:var(--ok-soft);border-color:transparent}.slot.ok .val{color:var(--ok)}
+.slot.none .val{color:var(--muted);font-size:16px}
+.slot.warn{background:var(--warn-soft);border-color:transparent}.slot.warn .val{color:var(--warn);font-size:15px}
+.row{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.row b{color:var(--ink);font-weight:600}
+.btns{display:flex;gap:8px}
+button{font:inherit;font-weight:600;font-size:13px;border-radius:8px;padding:7px 14px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.note{font-size:12px;background:var(--warn-soft);color:var(--warn);padding:8px 10px;border-radius:8px}
+.grid2{display:grid;grid-template-columns:1fr 1.25fr;gap:14px}
+.console{background:var(--console);color:var(--console-ink);border-radius:12px;padding:12px 14px;height:360px;overflow:auto;font:12px/1.6 "JetBrains Mono",monospace}
+.console .t{color:#64748b;margin-right:8px}
+.console .ok{color:#34d399}.console .warn{color:#fbbf24}.console .error{color:#f87171}
+.tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;height:360px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-weight:600}
+td.r{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.tag{font-weight:600}.tag.available{color:var(--ok)}.tag.none{color:var(--muted)}.tag.unknown,.tag.login_required{color:var(--warn)}
+a{color:var(--brand)}
+.empty{color:var(--muted);padding:20px;text-align:center}
+@media (max-width:820px){.stats{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.routes{grid-template-columns:1fr}header{padding:12px 16px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">V</div>
+  <div><h1>Visa Slot Monitor</h1><div class="sub">VFS · BLS · live appointment availability</div></div>
+  <div class="live"><span class="dot" id="livedot"></span><span id="livetxt">Connected</span></div>
+</header>
+<main>
+  <section class="stats">
+    <div class="stat"><span>Active routes</span><b id="st-active">0</b></div>
+    <div class="stat"><span>Checks (recent)</span><b id="st-checks">0</b></div>
+    <div class="stat"><span>Slots found</span><b id="st-found">0</b></div>
+    <div class="stat"><span>Last check</span><b id="st-last" style="font-size:18px">—</b></div>
+  </section>
+
+  <h2>Monitoring routes</h2>
+  <section class="routes" id="routes"></section>
+
+  <section class="grid2">
+    <div><h2>Live activity</h2><div class="console" id="console"></div></div>
+    <div><h2>Check history</h2><div class="tablewrap"><table>
+      <thead><tr><th>Time</th><th>Route</th><th>Result</th><th>Next slot</th><th></th></tr></thead>
+      <tbody id="history"></tbody></table></div></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const LABEL = {stopped:"Stopped",starting:"Starting…",waiting_login:"Waiting for login",running:"Monitoring",checking:"Checking portal…"};
+let pinnedBottom = true;
+$("#console").addEventListener("scroll", e => { const c=e.target; pinnedBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 30; });
+
+function fmtIn(s){ if(s==null) return "—"; const m=Math.floor(s/60), r=s%60; return m ? `${m}m ${String(r).padStart(2,"0")}s` : `${r}s`; }
+
+function slotBox(r){
+  if(!r.result) return `<div class="slot none"><div class="lbl">Next available slot</div><div class="val">No check yet</div></div>`;
+  if(r.result==="available") return `<div class="slot ok"><div class="lbl">Next available slot</div><div class="val">${esc(r.earliest)}${r.times.length?` · ${esc(r.times.join(", "))}`:""}</div></div>`;
+  if(r.result==="none") return `<div class="slot none"><div class="lbl">Next available slot</div><div class="val">No slots available right now</div></div>`;
+  if(r.result==="login_required") return `<div class="slot warn"><div class="lbl">Status</div><div class="val">Session expired — log in again</div></div>`;
+  return `<div class="slot warn"><div class="lbl">Status</div><div class="val">Page not recognised — needs review</div></div>`;
+}
+
+function card(r){
+  const on = r.status !== "stopped";
+  return `<div class="card ${r.result==="available"?"found":""}">
+    <div class="top"><div><div class="name">${esc(r.name)}</div><div class="meta">${esc(r.provider)} · ${esc(r.category)}</div></div>
+      <span class="pill s-${r.status}"><i></i>${LABEL[r.status]||r.status}</span></div>
+    ${slotBox(r)}
+    ${r.status==="waiting_login"?`<div class="note">Signing in with the login from .env. If the portal shows a CAPTCHA or asks for an OTP, complete it in the Chrome window — monitoring starts by itself once you're in.</div>`:""}
+    <div class="row"><span>Last check <b>${esc(r.last_check||"—")}</b></span><span>Next check in <b class="cd" data-id="${r.id}">—</b></span>
+      <span>Every <b>${r.interval_min||"—"} min</b></span>${r.last_alert?`<span>Last alert <b>${esc(r.last_alert)}</b></span>`:""}</div>
+    <div class="btns">
+      <button class="primary" ${on?"disabled":""} onclick="act(${r.id},'start')">Start</button>
+      <button ${r.status!=="running"?"disabled":""} onclick="act(${r.id},'check')">Check now</button>
+      <button class="danger" ${!on?"disabled":""} onclick="act(${r.id},'stop')">Stop</button>
+      ${r.screenshot?`<a style="margin-left:auto;align-self:center;font-size:12px" target="_blank" href="/screenshots/${encodeURIComponent(r.screenshot)}">Latest screenshot</a>`:""}
+      <a style="${r.screenshot?"":"margin-left:auto;"}align-self:center;font-size:12px" target="_blank" href="${esc(r.booking_url)}">Open portal ↗</a>
+    </div></div>`;
+}
+
+const nextAt = {}; let lastRoutesHtml = "", lastLogHtml = "", lastHistHtml = "";
+function tickCountdowns(){ document.querySelectorAll(".cd").forEach(el => { const t = nextAt[el.dataset.id]; el.textContent = t==null ? "—" : fmtIn(Math.max(0, Math.round((t-Date.now())/1000))); }); }
+setInterval(tickCountdowns, 500);
+
+async function act(id, action){ await fetch(`/api/routes/${id}/${action}`, {method:"POST"}); refresh(); }
+
+async function refresh(){
+  try{
+    const d = await (await fetch("/api/state")).json();
+    $("#livedot").classList.remove("off"); $("#livetxt").textContent = "Connected";
+    d.routes.forEach(r => { nextAt[r.id] = r.next_in==null ? null : Date.now() + r.next_in*1000; });
+    const rh = d.routes.map(card).join(""); if (rh !== lastRoutesHtml) { $("#routes").innerHTML = rh; lastRoutesHtml = rh; }
+    tickCountdowns();
+    $("#st-active").textContent = d.routes.filter(r=>r.status!=="stopped").length;
+    $("#st-checks").textContent = d.history.length;
+    $("#st-found").textContent = d.history.filter(h=>h.status==="available").length;
+    $("#st-last").textContent = d.history[0] ? d.history[0].ts.slice(11) : "—";
+    const c = $("#console");
+    const lh = d.logs.length ? d.logs.map(l=>`<div><span class="t">${esc(l.ts)}</span><span class="${esc(l.level)}">${esc(l.msg)}</span></div>`).join("")
+                                : `<div class="t">Press Start on a route to begin monitoring.</div>`;
+    if (lh !== lastLogHtml) { c.innerHTML = lh; lastLogHtml = lh; }
+    if(pinnedBottom) c.scrollTop = c.scrollHeight;
+    const hh = d.history.length ? d.history.map(h=>`<tr><td>${esc(h.ts.replace("T"," "))}</td><td class="r" title="${esc(h.monitor)}">${esc(h.monitor)}</td>
+      <td><span class="tag ${esc(h.status)}">${esc(h.status.replace("_"," "))}</span></td><td>${esc(h.earliest||"—")}</td>
+      <td>${h.screenshot?`<a target="_blank" href="/screenshots/${encodeURIComponent(h.screenshot)}">view</a>`:""}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">No checks yet</td></tr>`;
+    if (hh !== lastHistHtml) { $("#history").innerHTML = hh; lastHistHtml = hh; }
+  }catch(e){ $("#livedot").classList.add("off"); $("#livetxt").textContent = "Disconnected"; }
+}
+refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

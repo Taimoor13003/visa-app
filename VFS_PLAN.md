@@ -55,7 +55,7 @@ The scraper should read the page, not call these itself.
 | Normal Chrome, person at the keyboard | works (Indonesia and Pakistan) |
 | Playwright with its bundled Chromium | Pakistan: `{"code": "403201"}`. Indonesia: page shell loads, login form never appears |
 | Playwright starting the installed Chrome (`BROWSER_CHANNEL=chrome`) | Indonesia: same as above, no login form |
-| Script attached to a Chrome that a person started | not tested |
+| Script attached to a Chrome that a person started | built (`BROWSER_CDP_URL`), tested on a local stand-in only, **not yet run on the live site** |
 
 VFS recognises a browser that is started by an automation tool and withholds the login form.
 `BROWSER_CHANNEL=chrome` does not help.

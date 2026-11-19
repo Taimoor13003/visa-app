@@ -101,6 +101,43 @@ Run it on a machine in Pakistan (or UAE for the UAE routes): the client's office
 server hosted in Pakistan. Keep the machine awake and the Chrome window open; set
 `TELEGRAM_OPERATOR_CHAT_IDS` so staff get "Login needed" when a session expires.
 
+## VFS: attach to your own Chrome
+
+VFS shows its login form only to a normally started browser, and keeps the login inside one tab
+(a reload logs you out and asks for the emailed code again). So for VFS routes a person logs in
+and the script works inside that open tab. Background and evidence: [VFS_PLAN.md](VFS_PLAN.md).
+
+1. Close nothing you need, then start a separate Chrome window for the monitor:
+
+   macOS
+   ```bash
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/visa-chrome"
+   ```
+   Windows (Command Prompt)
+   ```bat
+   "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\visa-chrome"
+   ```
+2. In that window open the VFS login page for your route and log in yourself: email, password,
+   the Cloudflare check, the emailed code. Wait for the dashboard. Keep the tab open.
+3. Put `BROWSER_CDP_URL=http://127.0.0.1:9222` in `.env`.
+4. One single check first:
+   ```bash
+   python monitor.py --inspect "Indonesia"
+   ```
+   It clicks "Start New Booking", picks the centre, category and sub-category from `config.yaml`,
+   prints the result and exits. Your Chrome stays open.
+5. If that result is right, run the monitor: `python monitor.py` (or the dashboard).
+
+What the script does and does not do on these routes:
+- never types the email, password or code, and never touches the Cloudflare check
+- never reloads or navigates the tab, and never clicks Continue
+- one check per route every 15 minutes at the fastest (20 by default)
+- on a login page it waits for you; on a block page, or a page it cannot read three times in a
+  row, it stops that route, alerts the operator, and does not retry by itself
+
+Do not use the tab yourself while the monitor runs, and do not reload it.
+VFS forbids automated access. This setup lowers the risk of a blocked account; it cannot remove it.
+
 ## Run without the dashboard
 ```bash
 python monitor.py

@@ -22,19 +22,31 @@ monitors:
     login_url: "https://visa.vfsglobal.com/pak/en/nld/login"
     start_url: "https://visa.vfsglobal.com/pak/en/nld/dashboard"     # only works once logged in
     booking_url: "https://visa.vfsglobal.com/pak/en/nld/login"
-    interval_minutes: 15
-    # Seen live 2026-11-19 on /pak/en/nld/application-detail (after "Start New Booking"):
-    #   "Choose your Application Centre"      e.g. "Netherlands Karachi" (3 centres)
-    #   "Choose your appointment category"    "Schengen Visa"
-    #   "Choose your sub-category"            e.g. "Family And Friends Visit", Tourism
-    #   then: "Earliest available slot for 1,2 Applicants is : 20-11-2026"
-    # Option texts match on any part, so "Islamabad" finds "Netherlands Islamabad".
-    steps:
-      - click: "Start New Booking"
-      - select: {index: 0, option: "Islamabad"}
-      - select: {index: 1, option: "Schengen Visa"}
-      - select: {index: 2, option: "Tourism"}
-      - wait: 3
+    # In-page route (see VFS_PLAN.md): a person logs in in their own Chrome, the script attaches
+    # (BROWSER_CDP_URL in .env), never reloads, and re-picks the centre to get a fresh result.
+    # Values are option codes (exact) or option texts. Pakistan codes are not known yet, so texts
+    # are used here; if one is wrong the check stops and lists the real options. Seen live on
+    # 2026-11-19: centre "Netherlands Karachi", category "Schengen Visa", sub-categories
+    # "Family And Friends Visit" and Tourism.
+    interval_minutes: 20
+    inpage:
+      centre: "Islamabad"
+      category: "Schengen Visa"
+      subcategory: "Tourism"
+
+  - name: "VFS – Indonesia → Netherlands – Jakarta"
+    provider: vfs
+    profile: vfs_idn
+    credentials: VFS_IDN               # unused: a person always logs in on in-page routes
+    category: "Schengen Short Stay"
+    login_url: "https://visa.vfsglobal.com/idn/en/nld/login"
+    start_url: "https://visa.vfsglobal.com/idn/en/nld/dashboard"
+    booking_url: "https://visa.vfsglobal.com/idn/en/nld/login"
+    interval_minutes: 20
+    inpage:                            # codes read from the live page on 2026-11-19
+      centre: "CGK"                    # Netherlands Jakarta (Surabaya = SUB, Bali = BZI)
+      category: "07052024"             # Schengen
+      subcategory: "07052024sss"       # Schengen Short Stay
 
   - name: "BLS – Pakistan → Spain – Islamabad"
     provider: bls

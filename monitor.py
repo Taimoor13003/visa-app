@@ -28,7 +28,7 @@ from playwright.sync_api import BrowserContext, Error as PWError, Page, TimeoutE
 import notify
 import store
 from scrapers import SITES
-from scrapers.base import AVAILABLE, LOGIN_REQUIRED, NONE, UNKNOWN, SlotResult
+from scrapers.base import AVAILABLE, BLOCKED, LOGIN_REQUIRED, NONE, UNKNOWN, SlotResult
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")    # before the settings below are read
@@ -108,6 +108,9 @@ def is_login_page(page: Page) -> bool:
 
 def go_to_login(page: Page, mon: dict) -> None:
     """Open the portal's own login page so the operator can sign in."""
+    if mon.get("inpage"):  # never navigate an in-page route's tab; the person handles it
+        page.bring_to_front()
+        return
     if mon.get("login_url") and goto(page, mon["login_url"]):
         page.wait_for_timeout(3000)
         wait_past_challenge(page)
@@ -120,7 +123,7 @@ MANUAL_LOGIN = False  # --manual-login: the script types nothing; a person does 
 def credentials(mon: dict) -> tuple[str, str] | None:
     """Read <PREFIX>_EMAIL / <PREFIX>_PASSWORD from .env, where PREFIX is the route's `credentials` key."""
     prefix = mon.get("credentials")
-    if not prefix or MANUAL_LOGIN:
+    if not prefix or MANUAL_LOGIN or mon.get("inpage"):  # in-page routes: a person always logs in
         return None
     # re-read .env each time so a login saved while the dashboard runs is picked up without a restart
     env = {**os.environ, **{k: v for k, v in dotenv_values(ROOT / ".env").items() if v}}
@@ -356,6 +359,8 @@ def screenshot(page: Page, mon: dict) -> Path:
 
 
 def check(page: Page, mon: dict) -> tuple[SlotResult, Path | None]:
+    if mon.get("inpage"):
+        return check_inpage(page, mon)
     try:
         if not goto(page, mon["start_url"]):
             return SlotResult(UNKNOWN, detail=f"timeout: portal did not load in {NAV_TIMEOUT_MS // 1000}s"), None
@@ -385,6 +390,170 @@ def check(page: Page, mon: dict) -> tuple[SlotResult, Path | None]:
         return SlotResult(UNKNOWN, detail=f"{kind}: {str(e).splitlines()[0]} (on {page.url})"), shot
 
 
+# ---------------------------------------------------------------- in-page routes (VFS)
+# VFS keeps the login inside one tab: any page load or reload sends that tab back to /login, and
+# every login needs a person (password, Cloudflare check, emailed one-time code). It also withholds
+# the login form from browsers started by an automation tool. So for a route with an `inpage:` block:
+#   - a person starts Chrome and logs in; the script attaches to that window (BROWSER_CDP_URL)
+#   - the script never navigates, never reloads, never types credentials, never clicks Continue
+#   - a check = re-pick the centre in the open booking form and read the slot message
+#   - on any block or logged-out page it stops and tells the operator; it never retries by itself
+# Details and the evidence behind each rule: VFS_PLAN.md.
+INPAGE_MIN_INTERVAL_MIN = 15
+CENTRE_SEL = "mat-select[formcontrolname=centerCode]"
+SUBCAT_SEL = "mat-select[formcontrolname=visaCategoryCode]"
+CATEGORY_SEL = "mat-select:not([formcontrolname=centerCode]):not([formcontrolname=visaCategoryCode])"
+LOADER_SEL = ".ngx-overlay"
+RESULT_SEL = "div.alert"
+
+
+def cdp_url() -> str:
+    return os.getenv("BROWSER_CDP_URL", "").strip()
+
+
+def attach_context(pw) -> BrowserContext:
+    """Attach to the Chrome window a person started with --remote-debugging-port. Local only."""
+    url = cdp_url()
+    if not re.match(r"^http://(127\.0\.0\.1|localhost):\d+/?$", url):
+        raise RuntimeError(f"BROWSER_CDP_URL must be a local address like http://127.0.0.1:9222 (got {url!r})")
+    try:
+        return pw.chromium.connect_over_cdp(url).contexts[0]
+    except PWError as e:
+        raise RuntimeError(f"Could not attach to Chrome at {url}. Start Chrome with --remote-debugging-port "
+                         f"first (see README, 'VFS: attach to your own Chrome').\n{str(e).splitlines()[0]}")
+
+
+def route_base(mon: dict) -> str:
+    """https://visa.vfsglobal.com/idn/en/nld/login → https://visa.vfsglobal.com/idn/en/nld/"""
+    return mon["login_url"].rsplit("/", 1)[0] + "/"
+
+
+def find_route_page(ctx: BrowserContext, mon: dict) -> Page | None:
+    """The already-open tab for this route. Never opens or loads one: a load would log it out."""
+    base = route_base(mon).lower()
+    return next((p for p in ctx.pages if p.url.lower().startswith(base)), None)
+
+
+def wait_for_attached_page(ctx: BrowserContext, mon: dict) -> Page:
+    name = mon["name"]
+    while True:
+        page = find_route_page(ctx, mon)
+        if page is None:
+            input(f"\n>>> [{name}] No tab for this route in the attached Chrome.\n"
+                  f"    Open {mon['login_url']} there yourself, log in (password, check, emailed code),\n"
+                  f"    wait for the dashboard, then press Enter here... ")
+            continue
+        why = block_reason(page)
+        if why:
+            raise SystemExit(f"[{name}] the portal says: {why}. Stopped without retrying.")
+        if is_login_page(page):
+            input(f"\n>>> [{name}] The tab is on the login page. Log in yourself in that window\n"
+                  f"    and wait for the dashboard, then press Enter here... ")
+            continue
+        print(f"[{name}] attached to the open tab: {page.url}")
+        return page
+
+
+def _settle(page: Page) -> None:
+    """Wait until the portal's full-page loader has come and gone."""
+    for _ in range(2):
+        page.wait_for_timeout(900)
+        try:
+            page.locator(LOADER_SEL).first.wait_for(state="hidden", timeout=40_000)
+        except PWError:
+            pass
+
+
+def _open_panel(page: Page, select_sel: str) -> None:
+    page.locator(select_sel).first.click(timeout=10_000)
+    page.locator("mat-option").first.wait_for(state="visible", timeout=10_000)
+
+
+def _find_option(page: Page, want: str):
+    """An option by its id (exact code such as CGK), else exact text, else a unique part of the text."""
+    by_id = page.locator(f'mat-option[id="{want}"]')
+    if by_id.count():
+        return by_id.first
+    texts = [t.strip() for t in page.locator("mat-option").all_inner_texts()]
+    exact = [i for i, t in enumerate(texts) if t.lower() == want.lower()]
+    part = [i for i, t in enumerate(texts) if want.lower() in t.lower()]
+    hit = exact or (part if len(part) == 1 else [])
+    if not hit:
+        page.keyboard.press("Escape")
+        raise LookupError(f"option {want!r} not found or not unique; the page offers: {texts}")
+    return page.locator("mat-option").nth(hit[0])
+
+
+def _pick(page: Page, select_sel: str, want: str, fresh: bool = False) -> None:
+    """Choose `want` in a dropdown. `fresh`: if it is already chosen, move to another option first,
+    because re-choosing the current option makes the portal do nothing."""
+    _open_panel(page, select_sel)
+    opt = _find_option(page, want)
+    if opt.get_attribute("aria-selected") == "true":
+        if not fresh:
+            page.keyboard.press("Escape")
+            return
+        other = page.locator('mat-option:not([aria-selected="true"])')
+        if not other.count():  # only one centre: nothing to move to, so the shown result is all there is
+            page.keyboard.press("Escape")
+            return
+        other.first.click()
+        _settle(page)
+        _open_panel(page, select_sel)
+        opt = _find_option(page, want)
+    opt.click()
+    _settle(page)
+
+
+def check_inpage(page: Page, mon: dict, repick: bool = True) -> tuple[SlotResult, Path | None]:
+    """One slot check inside the open booking form. No navigation, no reload, no Continue."""
+    cfg = mon["inpage"]
+    try:
+        why = block_reason(page)
+        if why:
+            return SlotResult(BLOCKED, detail=why), None
+        if is_login_page(page):
+            return SlotResult(LOGIN_REQUIRED), None
+        marker = cfg.get("url_marker", "application-detail")
+        if marker not in page.url:
+            start = page.get_by_role("button", name=cfg.get("open", "Start New Booking")).locator("visible=true")
+            if not start.count():
+                return SlotResult(UNKNOWN, detail=f"error: not on the booking form and no way to it (on {page.url})"), None
+            start.first.click()
+            page.wait_for_url(f"**/*{marker}*", timeout=30_000)
+            _settle(page)
+        if repick:
+            _pick(page, CENTRE_SEL, str(cfg["centre"]), fresh=True)
+            if cfg.get("category"):
+                _pick(page, CATEGORY_SEL, str(cfg["category"]))
+            if cfg.get("subcategory"):
+                _pick(page, SUBCAT_SEL, str(cfg["subcategory"]))
+            try:
+                page.locator(RESULT_SEL).first.wait_for(state="visible", timeout=20_000)
+            except PWError:
+                pass
+        why = block_reason(page)
+        if why:
+            return SlotResult(BLOCKED, detail=why), None
+        if is_login_page(page):
+            return SlotResult(LOGIN_REQUIRED), None
+        alerts = [t.strip() for t in page.locator(RESULT_SEL).locator("visible=true").all_inner_texts() if t.strip()]
+        text = "\n".join(alerts) or page.inner_text("body")
+        result = SITES[mon["provider"]].parse_page(text)
+        SHOTS.mkdir(exist_ok=True)
+        safe = "".join(ch if ch.isalnum() else "_" for ch in mon["name"])[:60]
+        shot = SHOTS / f"{datetime.now():%Y%m%d_%H%M%S}_{safe}.png"
+        page.screenshot(path=str(shot))  # viewport only: a full-page capture would resize the person's tab
+        return result, shot
+    except Exception as e:  # noqa: BLE001
+        try:
+            page.keyboard.press("Escape")  # never leave a dropdown hanging open in the person's tab
+        except Exception:  # noqa: BLE001
+            pass
+        kind = "timeout" if isinstance(e, PWTimeout) else "error"
+        return SlotResult(UNKNOWN, detail=f"{kind}: {str(e).splitlines()[0]} (on {page.url})"), None
+
+
 # ---------------------------------------------------------------- alerting logic
 def slot_message(mon: dict, r: SlotResult) -> tuple[str, str]:
     when = r.earliest + (f" — times: {', '.join(r.times)}" if r.times else "")
@@ -402,7 +571,9 @@ class Monitor:
 
     def __init__(self, mon: dict, page: Page | None, log=print):
         self.mon, self.page, self.log = mon, page, log
-        self.interval = max(float(mon.get("interval_minutes", 15)), MIN_INTERVAL_MIN) * 60
+        floor = INPAGE_MIN_INTERVAL_MIN if mon.get("inpage") else MIN_INTERVAL_MIN
+        self.interval = max(float(mon.get("interval_minutes", 15)), floor) * 60
+        self.halted = False            # set on a block: no more checks until a person restarts the monitor
         self.next_run = 0.0
         self.last_alert_key: str | None = None
         self.login_alerted = False
@@ -423,11 +594,23 @@ class Monitor:
         self.last, self.last_shot, self.last_ts = r, shot or self.last_shot, datetime.now()
         return r
 
+    def _halt(self, subject: str, detail: str) -> None:
+        self.halted = True
+        self.log(f"[{self.mon['name']}] HALTED: {detail[:160]} — no more checks until restarted")
+        notify.send(subject, f"{detail[:300]}\n\nThe monitor has stopped checking this route and will not "
+                             f"retry by itself. Look at the browser window, then restart it.", operator_only=True)
+
     def tick(self) -> None:
         name = self.mon["name"]
+        if self.halted:
+            return
         r = self._check()
         extra = f" — {r.detail[:120]}" if r.status == UNKNOWN and r.detail.startswith(("error", "timeout")) else ""
         self.log(f"[{name}] {r.status} {r.earliest or ''} {' '.join(r.times)}".rstrip() + extra)
+
+        if r.status == BLOCKED:
+            self._halt(f"⛔ Portal blocked us: {name}", f"The portal says: {r.detail}")
+            return
 
         if r.status == LOGIN_REQUIRED:
             if not self.login_alerted:
@@ -443,6 +626,8 @@ class Monitor:
                 notify.send(f"⚠️ Check failing: {name}",
                             f"Page not recognised {UNKNOWN_ALERT_AFTER} times in a row.\n{r.detail[:300]}",
                             self.last_shot, operator_only=True)
+                if self.mon.get("inpage"):  # do not keep clicking in a page we no longer understand
+                    self._halt(f"⛔ Stopped: {name}", f"Page not recognised {UNKNOWN_ALERT_AFTER} times: {r.detail}")
             return
         self.unknown_streak = 0
 
@@ -455,7 +640,10 @@ class Monitor:
             return
         self.log(f"[{name}] slot seen ({r.earliest}) — re-checking in {CONFIRM_DELAY_S}s before alerting")
         time.sleep(CONFIRM_DELAY_S)
-        r2 = self._check()
+        if self.mon.get("inpage"):  # confirm by re-reading the message; a second re-pick would double the requests
+            r2, _ = check_inpage(self.page, self.mon, repick=False)
+        else:
+            r2 = self._check()
         if r2.status != AVAILABLE:
             self.log(f"[{name}] not confirmed on re-check ({r2.status}); no alert sent")
             return
@@ -470,6 +658,14 @@ def open_pages(pw, monitors: list[dict]) -> dict[str, Page]:
     contexts: dict[str, BrowserContext] = {}
     pages: dict[str, Page] = {}
     for mon in monitors:
+        if mon.get("inpage") and cdp_url():  # attach to the person's own Chrome; open and load nothing
+            if "__attached__" not in contexts:
+                try:
+                    contexts["__attached__"] = attach_context(pw)
+                except RuntimeError as e:
+                    raise SystemExit(str(e))
+            pages[mon["name"]] = wait_for_attached_page(contexts["__attached__"], mon)
+            continue
         prof = mon.get("profile", mon["provider"])
         if prof not in contexts:
             contexts[prof] = launch_context(pw, prof)
@@ -515,7 +711,8 @@ def main() -> None:
             (DEBUG / "page.html").write_text(page.content(), encoding="utf-8")
             print(f"\nResult: {r}\nScreenshot: {shot}\nPage text/HTML saved in {DEBUG}/")
             print(f"Dropdowns found: {page.get_by_role('combobox').count()}")
-            input("Press Enter to close...")
+            if not (mon.get("inpage") and cdp_url()):  # attached: nothing of ours to close
+                input("Press Enter to close...")
             return
 
         mons = [Monitor(m, pages[m["name"]]) for m in monitors]

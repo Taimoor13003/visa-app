@@ -19,8 +19,8 @@ import yaml
 from playwright.sync_api import sync_playwright
 
 import monitor
-from monitor import (Monitor, captcha_state, credentials, fill_login, go_to_login, is_login_page,
-                     launch_context, login_error, open_start, submit_login)
+from monitor import (Monitor, attach_context, captcha_state, cdp_url, credentials, fill_login, find_route_page,
+                     go_to_login, is_login_page, launch_context, login_error, open_start, submit_login)
 
 ROOT = Path(__file__).parent
 HEADLESS = os.getenv("HEADLESS") == "1"  # default visible: login happens in this browser window
@@ -94,6 +94,10 @@ class Engine:
                             self._set(idx, "checking")
                             m.tick()
                             m.next_run = time.time() + m.interval
+                            if m.halted:  # blocked or unreadable: stop this route until a person restarts it
+                                self.monitors.pop(idx, None)
+                                self._set(idx, "stopped")
+                                continue
                             if m.last and m.last.status == monitor.LOGIN_REQUIRED:
                                 self.log(f"[{m.mon['name']}] session expired — opening the login page", "warn")
                                 go_to_login(m.page, m.mon)
@@ -119,7 +123,8 @@ class Engine:
                     self._start(pw, contexts, idx, route)
                 elif action == "stop" and idx in self.monitors:
                     m = self.monitors.pop(idx)
-                    m.page.close()
+                    if not getattr(m, "attached", False):  # never close the person's own tab
+                        m.page.close()
                     self._set(idx, "stopped")
                     self.log(f"[{route['name']}] stopped")
                 elif action == "check" and idx in self.monitors and self.status[idx] == "running":
@@ -133,6 +138,26 @@ class Engine:
     def _start(self, pw, contexts: dict, idx: int, route: dict) -> None:
         self._set(idx, "starting")
         self.log(f"[{route['name']}] starting — opening {route['start_url']}")
+        if route.get("inpage") and cdp_url():  # attach to the person's own Chrome; open and load nothing
+            if "__attached__" not in contexts:
+                contexts["__attached__"] = attach_context(pw)
+            page = find_route_page(contexts["__attached__"], route)
+            if page is None:
+                self.log(f"[{route['name']}] no tab for this route in the attached Chrome — open "
+                         f"{route['login_url']} there, log in, then press Start again", "warn")
+                self._set(idx, "stopped")
+                return
+            m = Monitor(route, page, log=lambda msg: self.log(msg, _level(msg)))
+            m.attached = True
+            with self.lock:
+                self.monitors[idx] = m
+            if is_login_page(page):
+                self.log(f"[{route['name']}] the tab is on the login page — log in yourself in that window", "warn")
+                self._set(idx, "waiting_login")
+            else:
+                self.log(f"[{route['name']}] attached to the open tab — monitoring started", "ok")
+                self._set(idx, "running")
+            return
         prof = route.get("profile", route["provider"])
         if prof not in contexts:
             contexts[prof] = launch_context(pw, prof, headless=HEADLESS)

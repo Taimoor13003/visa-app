@@ -108,10 +108,13 @@ def go_to_login(page: Page, mon: dict) -> None:
     page.bring_to_front()
 
 
+MANUAL_LOGIN = False  # --manual-login: the script types nothing; a person does the whole login
+
+
 def credentials(mon: dict) -> tuple[str, str] | None:
     """Read <PREFIX>_EMAIL / <PREFIX>_PASSWORD from .env, where PREFIX is the route's `credentials` key."""
     prefix = mon.get("credentials")
-    if not prefix:
+    if not prefix or MANUAL_LOGIN:
         return None
     # re-read .env each time so a login saved while the dashboard runs is picked up without a restart
     env = {**os.environ, **{k: v for k, v in dotenv_values(ROOT / ".env").items() if v}}
@@ -281,6 +284,8 @@ def wait_for_manual_login(page: Page, mon: dict) -> None:
                 print(f"[{mon['name']}] no CAPTCHA on the form — clicked Sign in")
             else:
                 print(f"[{mon['name']}] complete the CAPTCHA in the window and click Sign in")
+        elif MANUAL_LOGIN:
+            print(f"[{mon['name']}] manual login: type the email and password yourself in the window")
         elif not credentials(mon):
             print(f"[{mon['name']}] no {mon.get('credentials', '<PREFIX>')}_EMAIL/_PASSWORD in .env — type them in the window")
         input(f"\n>>> [{mon['name']}] Finish the login in the browser window (CAPTCHA / OTP if asked) "
@@ -462,7 +467,11 @@ def main() -> None:
     ap.add_argument("--config", default=str(ROOT / "config.yaml"))
     ap.add_argument("--inspect", metavar="NAME")
     ap.add_argument("--test-alert", action="store_true")
+    ap.add_argument("--manual-login", action="store_true",
+                    help="type nothing into the login form; a person logs in, then the script reads the slots")
     args = ap.parse_args()
+    global MANUAL_LOGIN
+    MANUAL_LOGIN = args.manual_login
 
     if args.test_alert:
         notify.send("🔔 Test alert", "Visa monitor alerts are working.")

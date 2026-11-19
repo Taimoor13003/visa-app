@@ -23,10 +23,16 @@ monitors:
     start_url: "https://visa.vfsglobal.com/pak/en/nld/dashboard"     # only works once logged in
     booking_url: "https://visa.vfsglobal.com/pak/en/nld/login"
     interval_minutes: 15
+    # Seen live 2026-11-19 on /pak/en/nld/application-detail (after "Start New Booking"):
+    #   "Choose your Application Centre"      e.g. "Netherlands Karachi" (3 centres)
+    #   "Choose your appointment category"    "Schengen Visa"
+    #   "Choose your sub-category"            e.g. "Family And Friends Visit", Tourism
+    #   then: "Earliest available slot for 1,2 Applicants is : 20-11-2026"
+    # Option texts match on any part, so "Islamabad" finds "Netherlands Islamabad".
     steps:
       - click: "Start New Booking"
       - select: {index: 0, option: "Islamabad"}
-      - select: {index: 1, option: "Short Stay"}
+      - select: {index: 1, option: "Schengen Visa"}
       - select: {index: 2, option: "Tourism"}
       - wait: 3
 

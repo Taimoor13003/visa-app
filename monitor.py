@@ -70,10 +70,16 @@ def proxy_settings() -> dict | None:
 def launch_context(pw, profile: str, headless: bool = False) -> BrowserContext:
     """One persistent Chromium profile per portal (keeps the login), through the proxy if set.
 
+    BROWSER_CHANNEL=chrome in .env uses the installed Google Chrome. VFS answered {"code": "403201"}
+    to Playwright's bundled Chromium on 2026-11-19 while the same connection worked in normal Chrome.
+
     BROWSER_ENGINE=cloak in .env swaps Playwright's Chromium for CloakBrowser (stealth build that
     hides automation fingerprints — helps with Cloudflare / bot checks, NOT with country blocks).
     Needs `pip install cloakbrowser` and CLOAKBROWSER_LICENSE_KEY (free key from cloakbrowser.dev)."""
     opts = {"headless": headless, "proxy": proxy_settings()}
+    channel = os.getenv("BROWSER_CHANNEL", "").strip().lower()
+    if channel:  # "chrome" / "msedge": drive the browser installed on this machine, not Playwright's bundled Chromium
+        opts["channel"] = channel
     if os.getenv("BROWSER_ENGINE", "").lower() == "cloak":
         from cloakbrowser import build_launch_options  # optional dependency
         opts = build_launch_options(**opts)                # adds executable_path, stealth args, env

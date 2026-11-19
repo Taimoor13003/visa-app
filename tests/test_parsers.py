@@ -22,6 +22,14 @@ def test_vfs_earliest_slot_with_time():
     assert r.status == AVAILABLE and r.earliest.startswith("04-12-2026") and r.times
 
 
+def test_vfs_live_page_2026_11_19():
+    """Text as shown on the live Pakistan → Netherlands page (Karachi, Family And Friends Visit)."""
+    r = parse_page("vfs", "Choose your sub-category*\nFamily And Friends Visit\n"
+                          "Earliest available slot for 1,2 Applicants is : 20-11-2026\n"
+                          "Earliest available slot for 3 Applicants is : 24-11-2026\nContinue")
+    assert r.status == AVAILABLE and r.earliest == "20-11-2026"
+
+
 def test_vfs_none():
     r = parse_page("vfs", "No appointment slots are currently available. Please try again later.")
     assert r.status == NONE

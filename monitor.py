@@ -156,6 +156,14 @@ def dump_login_page(page: Page, tag: str) -> None:
         pass
 
 
+def rate_limited(page: Page) -> bool:
+    """True on the portal's "Too Many Requests … excessive requests from your IP" page."""
+    try:
+        return "too many requests" in (page.title() + " " + page.inner_text("body", timeout=1000)).lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def fill_login(page: Page, mon: dict) -> bool:
     """Type the email + password into the portal's login form. False if there is no form or no credentials.
 
@@ -173,13 +181,21 @@ def fill_login(page: Page, mon: dict) -> bool:
             verify = btn.first if btn.count() else None
         tries = _verify_tries.get(id(page), 0)
         if email_box is not None and verify is not None and not email_box.input_value():
-            if tries >= MAX_VERIFY_TRIES:  # bounced back again: stop, a person must look
-                return False
+            if tries:  # we already submitted the email and the portal sent us back
+                err = login_error(page)
+                if err or tries >= MAX_VERIFY_TRIES:  # rejected: re-submitting only feeds the rate limit
+                    if tries < 99:
+                        _verify_tries[id(page)] = 99  # say it once, then stay quiet
+                        print(f"[{mon['name']}] the portal sent the login back after Verify"
+                              f"{' — it says: ' + err if err else ''}. Not retrying; check "
+                              f"{mon.get('credentials', '<PREFIX>')}_EMAIL in .env is a registered account.")
+                    return False
             _verify_tries[id(page)] = tries + 1
             _type(email_box, creds[0])
             verify.click(timeout=5000)
             print(f"[{mon['name']}] email typed — clicked Verify, waiting for the password page")
         return False
+    _verify_tries.pop(id(page), None)  # password page reached: a later re-login on this page starts fresh
     if email_box is not None and not email_box.input_value():
         _type(email_box, creds[0])
     if not pw_box.input_value():
@@ -235,12 +251,19 @@ def wait_for_manual_login(page: Page, mon: dict) -> None:
     if not open_start(page, mon) or is_login_page(page):
         go_to_login(page, mon)
         filled, last_url, n = False, None, 0
+        has_creds = credentials(mon) is not None
         for _ in range(90):  # two-step logins: email → Verify → password page (up to ~90 s)
             if page.url != last_url:  # new login page: keep its HTML for selector tuning
                 page.wait_for_timeout(1500)
                 last_url, n = page.url, n + 1
                 dump_login_page(page, str(n))
                 print(f"[{mon['name']}] login page {n}: {page.url}  (saved debug/login_{n}.*)")
+                if rate_limited(page):
+                    print(f"[{mon['name']}] the portal says Too Many Requests — this IP is rate-limited. "
+                          f"Stop here and try again in a few hours; retrying now extends the block.")
+                    break
+            if not has_creds:
+                break
             try:
                 filled = fill_login(page, mon)
             except PWError as e:  # page navigated mid-typing, or a field was not clickable

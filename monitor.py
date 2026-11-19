@@ -127,7 +127,7 @@ BLS_LOGIN_INPUT_SEL = "input.entry-disabled"
 VERIFY_SEL = "#btnVerify"
 VERIFY_RE = re.compile(r"^\s*verify\s*$", re.I)
 TYPE_DELAY_MS = 60  # type key by key like a person; BLS flags instant form fills as bots
-MAX_VERIFY_TRIES = 2  # per page; never keep re-submitting the email if BLS sends us back
+MAX_VERIFY_TRIES = 1  # per page; if the portal sends us back after Verify, a person must look
 _verify_tries: dict[int, int] = {}
 
 
@@ -259,9 +259,10 @@ def wait_for_manual_login(page: Page, mon: dict) -> None:
                 dump_login_page(page, str(n))
                 print(f"[{mon['name']}] login page {n}: {page.url}  (saved debug/login_{n}.*)")
                 if rate_limited(page):
-                    print(f"[{mon['name']}] the portal says Too Many Requests — this IP is rate-limited. "
-                          f"Stop here and try again in a few hours; retrying now extends the block.")
-                    break
+                    # exit rather than fall through to the "press Enter" prompt: Enter reloads the portal
+                    raise SystemExit(f"[{mon['name']}] the portal says Too Many Requests — this IP is rate-limited. "
+                                     f"Stopped without retrying. Try again in a few hours; "
+                                     f"every load during the block can extend it.")
             if not has_creds:
                 break
             try:

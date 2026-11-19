@@ -119,15 +119,71 @@ def credentials(mon: dict) -> tuple[str, str] | None:
     return (email, pw) if email and pw else None
 
 
+# BLS (appointment.thespainvisa.com/Global/account/login, seen 2026-11-19): step one renders ten
+# <input class="form-control entry-disabled" type="text"> with random ids, all labelled "Email";
+# random CSS classes hide nine, so the real field is the single *visible* one. The button is
+# <button id="btnVerify">Verify</button>. Password + CAPTCHA come on the next page.
+BLS_LOGIN_INPUT_SEL = "input.entry-disabled"
+VERIFY_SEL = "#btnVerify"
+VERIFY_RE = re.compile(r"^\s*verify\s*$", re.I)
+TYPE_DELAY_MS = 60  # type key by key like a person; BLS flags instant form fills as bots
+MAX_VERIFY_TRIES = 2  # per page; never keep re-submitting the email if BLS sends us back
+_verify_tries: dict[int, int] = {}
+
+
+def _visible(page: Page, selector: str):
+    loc = page.locator(selector).locator("visible=true")
+    return loc.first if loc.count() else None
+
+
+def _visible_email_box(page: Page):
+    return _visible(page, f"{BLS_LOGIN_INPUT_SEL}:not([type=password])") or _visible(page, EMAIL_SEL)
+
+
+def _type(box, text: str) -> None:
+    box.click(timeout=5000)  # short: a loader overlay must not stall the login loop for 30 s
+    box.press_sequentially(text, delay=TYPE_DELAY_MS, timeout=15000)
+
+
+def dump_login_page(page: Page, tag: str) -> None:
+    """Save the login page as HTML + text + screenshot in debug/ (for tuning selectors)."""
+    try:
+        DEBUG.mkdir(exist_ok=True)
+        (DEBUG / f"login_{tag}.html").write_text(page.content(), encoding="utf-8")
+        (DEBUG / f"login_{tag}.txt").write_text(f"URL: {page.url}\n\n{page.inner_text('body')}", encoding="utf-8")
+        page.screenshot(path=str(DEBUG / f"login_{tag}.png"), full_page=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def fill_login(page: Page, mon: dict) -> bool:
-    """Type the email + password into the portal's login form. False if there is no form or no credentials."""
+    """Type the email + password into the portal's login form. False if there is no form or no credentials.
+
+    Two-step logins (BLS): when only the email box is showing, type the email and click Verify,
+    then return False; a later call types the password once that page appears. True = password typed."""
     creds = credentials(mon)
-    if not creds or not page.locator(PASSWORD_SEL).count():
+    if not creds:
         return False
-    email_box = page.locator(EMAIL_SEL).first
-    if email_box.count():
-        email_box.fill(creds[0])
-    page.locator(PASSWORD_SEL).first.fill(creds[1])
+    pw_box = _visible(page, PASSWORD_SEL)
+    email_box = _visible_email_box(page)
+    if pw_box is None:
+        verify = _visible(page, VERIFY_SEL)
+        if verify is None:
+            btn = page.get_by_role("button", name=VERIFY_RE).locator("visible=true")
+            verify = btn.first if btn.count() else None
+        tries = _verify_tries.get(id(page), 0)
+        if email_box is not None and verify is not None and not email_box.input_value():
+            if tries >= MAX_VERIFY_TRIES:  # bounced back again: stop, a person must look
+                return False
+            _verify_tries[id(page)] = tries + 1
+            _type(email_box, creds[0])
+            verify.click(timeout=5000)
+            print(f"[{mon['name']}] email typed — clicked Verify, waiting for the password page")
+        return False
+    if email_box is not None and not email_box.input_value():
+        _type(email_box, creds[0])
+    if not pw_box.input_value():
+        _type(pw_box, creds[1])
     return True
 
 
@@ -146,7 +202,7 @@ def submit_login(page: Page) -> None:
     if btn.count():
         btn.first.click()
     else:
-        page.locator(PASSWORD_SEL).first.press("Enter")
+        page.locator(PASSWORD_SEL).locator("visible=true").first.press("Enter")
 
 
 def login_error(page: Page) -> str:
@@ -178,7 +234,23 @@ def open_start(page: Page, mon: dict) -> bool:
 def wait_for_manual_login(page: Page, mon: dict) -> None:
     if not open_start(page, mon) or is_login_page(page):
         go_to_login(page, mon)
-        if fill_login(page, mon):
+        filled, last_url, n = False, None, 0
+        for _ in range(90):  # two-step logins: email → Verify → password page (up to ~90 s)
+            if page.url != last_url:  # new login page: keep its HTML for selector tuning
+                page.wait_for_timeout(1500)
+                last_url, n = page.url, n + 1
+                dump_login_page(page, str(n))
+                print(f"[{mon['name']}] login page {n}: {page.url}  (saved debug/login_{n}.*)")
+            try:
+                filled = fill_login(page, mon)
+            except PWError as e:  # page navigated mid-typing, or a field was not clickable
+                print(f"[{mon['name']}] login step error: {str(e).splitlines()[0]}")
+                dump_login_page(page, f"{n}_error")
+                filled = False
+            if filled or not is_login_page(page):
+                break
+            page.wait_for_timeout(1000)
+        if filled:
             print(f"[{mon['name']}] email + password filled in")
             if captcha_state(page) == "none":
                 submit_login(page)

@@ -159,12 +159,25 @@ def dump_login_page(page: Page, tag: str) -> None:
         pass
 
 
-def rate_limited(page: Page) -> bool:
-    """True on the portal's "Too Many Requests … excessive requests from your IP" page."""
+VFS_DENIED_RE = re.compile(r'^\s*\{\s*"code"\s*:\s*"403\d*"')  # VFS answers a bare JSON body, e.g. {"code": "403201"}
+
+
+def block_reason(page: Page) -> str:
+    """Why the portal refused this connection, or "" if it did not.
+    BLS: a "Too Many Requests … excessive requests from your IP" page. VFS: a bare 403 JSON body."""
     try:
-        return "too many requests" in (page.title() + " " + page.inner_text("body", timeout=1000)).lower()
+        body = page.inner_text("body", timeout=1000)
     except Exception:  # noqa: BLE001
-        return False
+        return ""
+    if "too many requests" in (page.title() + " " + body).lower():
+        return "Too Many Requests — this IP is rate-limited. Try again in a few hours"
+    if VFS_DENIED_RE.match(body) or "access denied" in body.lower()[:300]:
+        return f"access denied ({' '.join(body.split())[:80]}). The portal refused this browser or connection"
+    return ""
+
+
+def rate_limited(page: Page) -> bool:
+    return block_reason(page).startswith("Too Many Requests")
 
 
 def fill_login(page: Page, mon: dict) -> bool:
@@ -261,11 +274,11 @@ def wait_for_manual_login(page: Page, mon: dict) -> None:
                 last_url, n = page.url, n + 1
                 dump_login_page(page, str(n))
                 print(f"[{mon['name']}] login page {n}: {page.url}  (saved debug/login_{n}.*)")
-                if rate_limited(page):
+                why = block_reason(page)
+                if why:
                     # exit rather than fall through to the "press Enter" prompt: Enter reloads the portal
-                    raise SystemExit(f"[{mon['name']}] the portal says Too Many Requests — this IP is rate-limited. "
-                                     f"Stopped without retrying. Try again in a few hours; "
-                                     f"every load during the block can extend it.")
+                    raise SystemExit(f"[{mon['name']}] the portal says: {why}. Stopped without retrying; "
+                                     f"every load during a block can extend it.")
             if not has_creds:
                 break
             try:

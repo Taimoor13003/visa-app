@@ -1,7 +1,7 @@
 """Measure how long a VFS login lasts, without sending anything to VFS.
 
 Attaches to the Chrome window started with --remote-debugging-port (BROWSER_CDP_URL in .env) and
-looks at the already-open tab once a minute: its address and any visible dialog. It never clicks,
+looks at the already-open tab every few seconds: its address and any visible session warning. It never clicks,
 types, navigates or reloads, so the portal receives no request from it. It stops and reports when
 the tab is back on a login / session-expired page, shows a session dialog, or Chrome is closed.
 
@@ -22,7 +22,21 @@ from playwright.sync_api import Error as PWError, sync_playwright
 import monitor
 
 LOG = monitor.DEBUG / "session_timer.log"
-DIALOG_RE = re.compile(r"session|expired|timed? ?out|logged out|sign in again|log ?in again", re.I)
+# Any visible text that talks about the session ending, wherever it sits in the page (the portal's
+# "5 minutes remaining" warning is not marked up as a dialog). Returns the text plus nearby buttons.
+WARNING_JS = r"""() => {
+  const re = /session|expire|remaining|time ?out|logged out|sign in again|log ?in again/i, out = [];
+  for (const el of document.querySelectorAll('body *')) {
+    const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim();
+    if (!own || !re.test(own) || /cookie|privacy/i.test(own)) continue;
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    if (!(r.width > 0 && r.height > 0) || cs.visibility === 'hidden' || cs.display === 'none') continue;
+    let box = el; for (let i = 0; i < 5 && box.parentElement && !box.querySelector('button'); i++) box = box.parentElement;
+    out.push(own.replace(/\s+/g, ' ').slice(0, 200) + '  [buttons: ' +
+             [...box.querySelectorAll('button')].map(b => b.innerText.trim()).filter(Boolean).slice(0, 4).join(' | ') + ']');
+  }
+  return [...new Set(out)].slice(0, 4);
+}"""
 
 
 def say(msg: str) -> None:
@@ -37,7 +51,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("route", help="part of the route name in config.yaml")
     ap.add_argument("--since", help='login time, "YYYY-MM-DD HH:MM" (default: now)')
-    ap.add_argument("--every", type=int, default=60, help="seconds between looks (default 60)")
+    ap.add_argument("--every", type=int, default=10, help="seconds between looks (default 10)")
     ap.add_argument("--max-hours", type=float, default=24)
     args = ap.parse_args()
     routes = [m for m in yaml.safe_load((monitor.ROOT / "config.yaml").read_text(encoding="utf-8"))["monitors"]
@@ -54,7 +68,7 @@ def main() -> None:
         if page is None or monitor.is_login_page(page):
             raise SystemExit("No logged-in tab for this route in the attached Chrome.")
         say(f"watching {mon['name']} — logged in since {start:%d-%m %H:%M}, tab on {page.url}")
-        last_url, looks = page.url, 0
+        last_url, looks, seen = page.url, 0, set()
         while (datetime.now() - start).total_seconds() < args.max_hours * 3600:
             time.sleep(args.every)
             looks += 1
@@ -63,9 +77,7 @@ def main() -> None:
                     say(f"ENDED after {age()}: the tab was closed")
                     return
                 url = page.url
-                dialogs = [" ".join(t.split())[:160] for t in
-                           page.locator("mat-dialog-container, [role=dialog], [role=alertdialog]")
-                           .locator("visible=true").all_inner_texts()]
+                warnings = page.evaluate(WARNING_JS)
             except PWError as e:
                 say(f"ENDED after {age()}: lost the connection to Chrome ({str(e).splitlines()[0][:80]})")
                 return
@@ -75,11 +87,14 @@ def main() -> None:
             if monitor.is_login_page(page):
                 say(f"LOGGED OUT after {age()}: tab is on {url}")
                 return
-            hit = [d for d in dialogs if DIALOG_RE.search(d) and not re.search(r"cookie|privacy preference", d, re.I)]
-            if hit:
-                say(f"SESSION DIALOG after {age()}: {hit[0]}")
-                return
-            if looks % 15 == 0:
+            for w in warnings:  # log each new warning once and keep watching until the real logout
+                if w not in seen:
+                    seen.add(w)
+                    say(f"SESSION WARNING after {age()}: {w}")
+            if not warnings and seen:
+                say(f"warning gone after {age()} (dismissed, or the session was extended)")
+                seen.clear()
+            if looks % max(1, 900 // args.every) == 0:
                 say(f"still logged in after {age()}")
         say(f"stopped watching after {age()} (time limit); still logged in")
 

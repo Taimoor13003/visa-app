@@ -464,6 +464,16 @@ def _settle(page: Page) -> None:
             pass
 
 
+def _close_panel(page: Page) -> None:
+    """Close an open dropdown and wait until it is really gone (it fades out, and would be in the screenshot)."""
+    page.keyboard.press("Escape")
+    try:
+        page.locator("mat-option").first.wait_for(state="hidden", timeout=3000)
+    except PWError:
+        pass
+    page.wait_for_timeout(300)
+
+
 def _open_panel(page: Page, select_sel: str) -> None:
     page.locator(select_sel).first.click(timeout=10_000)
     page.locator("mat-option").first.wait_for(state="visible", timeout=10_000)
@@ -479,7 +489,7 @@ def _find_option(page: Page, want: str):
     part = [i for i, t in enumerate(texts) if want.lower() in t.lower()]
     hit = exact or (part if len(part) == 1 else [])
     if not hit:
-        page.keyboard.press("Escape")
+        _close_panel(page)
         raise LookupError(f"option {want!r} not found or not unique; the page offers: {texts}")
     return page.locator("mat-option").nth(hit[0])
 
@@ -491,11 +501,11 @@ def _pick(page: Page, select_sel: str, want: str, fresh: bool = False) -> None:
     opt = _find_option(page, want)
     if opt.get_attribute("aria-selected") == "true":
         if not fresh:
-            page.keyboard.press("Escape")
+            _close_panel(page)
             return
         other = page.locator('mat-option:not([aria-selected="true"])')
         if not other.count():  # only one centre: nothing to move to, so the shown result is all there is
-            page.keyboard.press("Escape")
+            _close_panel(page)
             return
         other.first.click()
         _settle(page)

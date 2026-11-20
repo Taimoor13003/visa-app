@@ -47,7 +47,12 @@ The scraper should read the page, not call these itself.
   password entry, a Cloudflare check and an emailed code.
 - Re-picking the centre in the open page fires a fresh `CheckIsSlotAvailable`. A new check
   needs no reload.
-- Session lifetime is not known yet. It has to be measured.
+- **The booking form has a hard 30-minute limit** (measured 2026-11-20, Indonesia route). Login
+  12:34, "Start New Booking" 12:34; at about 12:59 a "5 minutes remaining" reminder; at 13:04:29
+  "You have spent the maximum time on the booking journey, So terminating the session." and the tab
+  was logged out. A slot check at 12:36 and clicking Ok on the reminder did not extend it.
+- Not known yet: whether a tab that stays on the dashboard (never opening the booking form) lives
+  longer, and whether leaving the form and re-entering it restarts the 30 minutes.
 
 ### Which browsers VFS accepts
 | Setup | Result |

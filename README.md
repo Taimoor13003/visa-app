@@ -128,7 +128,7 @@ and the script works inside that open tab. Background and evidence: [VFS_PLAN.md
    prints the result and exits. Your Chrome stays open.
 5. If that result is right, run the monitor: `python monitor.py` (or the dashboard).
 
-What the script does and does not do on these routes:
+What the script does and does not do on these routes (without `auto_login`, see the next section):
 - never types the email, password or code, and never touches the Cloudflare check
 - never reloads or navigates the tab, and never clicks Continue
 - one check per route every 15 minutes at the fastest (20 by default)
@@ -137,6 +137,51 @@ What the script does and does not do on these routes:
 
 Do not use the tab yourself while the monitor runs, and do not reload it.
 VFS forbids automated access. This setup lowers the risk of a blocked account; it cannot remove it.
+
+## VFS: automatic login
+
+VFS ends every login 30 minutes after it started, so a monitor that waits for a person stops twice
+an hour. A route with `auto_login: true` in `config.yaml` logs in by itself at the start of a run:
+
+1. Start Chrome as in the section above and put `BROWSER_CDP_URL` in `.env`. No need to log in.
+2. Put the portal login in `.env` (`VFS_EMAIL`, `VFS_PASSWORD` for a route with `credentials: VFS`).
+3. Let the monitor read the emailed code: create a Gmail App Password for the mailbox the code is
+   sent to and put it in `.env` as `OTP_IMAP_PASSWORD`. Then check it:
+   ```bash
+   python otp_mail.py --check
+   ```
+   It lists the recent code mails it can see (sender, subject, time) with the code masked. If it
+   lists none, set `OTP_MAIL_FROM` to part of the real sender address.
+4. Try the login alone, once:
+   ```bash
+   python login_test.py "Indonesia" --with-code
+   ```
+5. Start the route in the dashboard. Every run is written to the **Run log**: the time, the
+   status, the next slot, and how the run got in ("logged in with the emailed code").
+
+What a run does: opens the Sign in page if the tab is not on it, closes the cookie banner with
+"Accept Only Necessary", fills the email and password, waits for the Cloudflare check to pass on
+its own, presses Sign In once, reads the code from the mailbox, enters it, presses Sign In once,
+then reads the slot as usual. A login younger than 24 minutes is reused instead.
+
+What it never does: touch the Cloudflare check, retry a rejected login or code, or log the code.
+A rejected login or code stops the route at once; any other failed login is tried once more at the
+next run and stops the route the second time. Each stop alerts the operator.
+
+This is one login and one emailed code per run, 12 a day at the configured 2-hour interval (a 30-minute
+interval would be about 48). VFS can see every one. Use the longest interval you can live with.
+
+`checks_per_login: 2` with `recheck_minutes: 20` makes each login look at the slot twice: once right after
+the login and once 20 minutes later, before the portal ends it. The second look never logs in; if
+the login is already gone it is skipped and the route waits for the next scheduled login.
+
+`active_hours: "07:00-23:00"` keeps the route quiet at night: no login begins outside those hours (this
+computer's clock). A run that falls outside them moves to the next opening. A second look on a login
+already made still runs, and so does a check a person asks for with "Check now".
+
+`report_every_check: true` mails `ALERT_EMAILS` the result of every check: slot, no slot, unreadable page or
+failed login. The first sighting of a slot is told once, by the confirmed slot alert. Outgoing mail uses the
+`SMTP_*` lines in `.env`; when `SMTP_USER` is the mailbox the codes are read from, its password is reused.
 
 ## Run without the dashboard
 ```bash

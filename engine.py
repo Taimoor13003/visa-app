@@ -62,6 +62,8 @@ class Engine:
                     "earliest": last.earliest if last else None,
                     "times": last.times if last else [],
                     "detail": (last.detail[:160] if last else ""),
+                    "auto_login": monitor.auto_login_on(r),
+                    "active_hours": r.get("active_hours"),
                     "last_check": m.last_ts.strftime("%d-%m %H:%M:%S") if m and m.last_ts else None,
                     "next_in": max(0, int(m.next_run - now)) if m and self.status[i] == "running" else None,
                     "screenshot": m.last_shot.name if m and m.last_shot else None,
@@ -91,14 +93,22 @@ class Engine:
                                 m.page.screenshot(path=str(monitor.SHOTS / f"live_{idx}.png"))
                                 m.live_url = m.page.url
                         elif st == "running" and time.time() >= m.next_run:
+                            if m.hold_for_quiet_hours():  # no new login outside the route's active hours
+                                continue
                             self._set(idx, "checking")
                             m.tick()
-                            m.next_run = time.time() + m.interval
+                            m.manual = False
+                            m.next_run = time.time() + m.next_delay()
+                            if not m.halted and 0 < m.login_checks < m.checks_per_login:
+                                self.log(f"[{m.mon['name']}] look {m.login_checks + 1} of {m.checks_per_login} on this "
+                                         f"login in {(m.next_run - time.time()) / 60:.0f} min")
                             if m.halted:  # blocked or unreadable: stop this route until a person restarts it
                                 self.monitors.pop(idx, None)
                                 self._set(idx, "stopped")
                                 continue
-                            if m.last and m.last.status == monitor.LOGIN_REQUIRED:
+                            if monitor.auto_login_on(m.mon):  # it logs in by itself at the next check
+                                self._set(idx, "running")
+                            elif m.last and m.last.status == monitor.LOGIN_REQUIRED:
                                 self.log(f"[{m.mon['name']}] session expired — opening the login page", "warn")
                                 go_to_login(m.page, m.mon)
                                 self._reset_login(m)
@@ -128,7 +138,7 @@ class Engine:
                     self._set(idx, "stopped")
                     self.log(f"[{route['name']}] stopped")
                 elif action == "check" and idx in self.monitors and self.status[idx] == "running":
-                    self.monitors[idx].next_run = 0
+                    self.monitors[idx].next_run, self.monitors[idx].manual = 0, True
                     self.log(f"[{route['name']}] manual check requested")
             except Exception as e:  # noqa: BLE001
                 self.log(f"[{route['name']}] {action} failed: {e}", "error")
@@ -142,6 +152,9 @@ class Engine:
             if "__attached__" not in contexts:
                 contexts["__attached__"] = attach_context(pw)
             page = find_route_page(contexts["__attached__"], route)
+            if page is None and monitor.auto_login_on(route):  # it logs in by itself: give it a tab to do so
+                page = contexts["__attached__"].new_page()
+                self.log(f"[{route['name']}] no tab for this route in the attached Chrome — opened one")
             if page is None:
                 self.log(f"[{route['name']}] no tab for this route in the attached Chrome — open "
                          f"{route['login_url']} there, log in, then press Start again", "warn")
@@ -151,7 +164,10 @@ class Engine:
             m.attached = True
             with self.lock:
                 self.monitors[idx] = m
-            if is_login_page(page):
+            if monitor.auto_login_on(route):
+                self.log(f"[{route['name']}] attached — automatic login is on; first run starts now", "ok")
+                self._set(idx, "running")
+            elif is_login_page(page):
                 self.log(f"[{route['name']}] the tab is on the login page — log in yourself in that window", "warn")
                 self._set(idx, "waiting_login")
             else:
@@ -212,7 +228,10 @@ class Engine:
         if captcha_state(page) == "pending":
             if not m.captcha_logged:
                 m.captcha_logged = True
-                self.log(f"[{name}] waiting for the CAPTCHA to be completed in the browser window", "warn")
+                press = "press Verify and complete the CAPTCHA" if page.locator(monitor.VERIFY_SEL).locator("visible=true").count() \
+                    else "complete the CAPTCHA"
+                self.log(f"[{name}] email and password are in — {press} in the browser window; "
+                         f"the login is sent as soon as it is done", "warn")
             return
         submit_login(page)
         m.login_submitted, m.submit_ts = True, time.time()
@@ -222,6 +241,8 @@ class Engine:
 def _level(msg: str) -> str:
     if "ALERT SENT" in msg or " available" in msg:
         return "ok"
+    if "HALTED" in msg or "login_failed" in msg:
+        return "error"
     if "unknown" in msg or "login_required" in msg or "not confirmed" in msg:
         return "warn"
     return "info"

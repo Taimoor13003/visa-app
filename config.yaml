@@ -37,16 +37,45 @@ monitors:
   - name: "VFS – Indonesia → Netherlands – Jakarta"
     provider: vfs
     profile: vfs_idn
-    credentials: VFS_IDN               # unused: a person always logs in on in-page routes
+    credentials: VFS                   # VFS_EMAIL / VFS_PASSWORD in .env
+    auto_login: true                   # each run signs in by itself and reads the emailed code (autologin.py);
+                                       # needs OTP_IMAP_PASSWORD in .env. Remove this line to log in by hand.
     category: "Schengen Short Stay"
     login_url: "https://visa.vfsglobal.com/idn/en/nld/login"
     start_url: "https://visa.vfsglobal.com/idn/en/nld/dashboard"
     booking_url: "https://visa.vfsglobal.com/idn/en/nld/login"
-    interval_minutes: 20
+    interval_minutes: 120              # one login and one code mail every 2 hours: 12 a day
+    checks_per_login: 2                # look at the slot twice on each login (the portal ends a login after 30 min)
+    recheck_minutes: 20                # the second look, counted from the login
+    active_hours: "07:00-23:00"        # no login outside these hours (this computer's clock); remove to run all night
+    report_every_check: true           # mail the result of every check, slot or no slot (ALERT_EMAILS in .env)
     inpage:                            # codes read from the live page on 2026-11-19
       centre: "CGK"                    # Netherlands Jakarta (Surabaya = SUB, Bali = BZI)
       category: "07052024"             # Schengen
       subcategory: "07052024sss"       # Schengen Short Stay
+
+  - name: "BLS – Indonesia → Spain – Jakarta"
+    provider: bls
+    profile: bls_idn
+    credentials: BLS_IDN               # reads BLS_IDN_EMAIL / BLS_IDN_PASSWORD from .env
+    category: "Tourist"
+    login_url: "https://indonesia.blsspainglobal.com/Global/account/login"
+    start_url: "https://indonesia.blsspainglobal.com/Global/appointment/newappointment"
+    booking_url: "https://indonesia.blsspainglobal.com/Global/account/login"
+    interval_minutes: 30
+    active_hours: "07:00-23:00"
+    report_every_check: true
+    # The login page was read on 2026-11-21. Everything below is NOT yet seen on a real page (no account yet):
+    # the dropdown texts and the calendar rules are placeholders to confirm with `python monitor.py --inspect "BLS – Indonesia"`.
+    steps:
+      - select: {index: 0, option: "Jakarta"}
+      - select: {index: 1, option: "Schengen"}
+      - select: {index: 2, option: "Tourist"}
+      - click: "Submit"
+      - wait: 4
+    extract:
+      dates: null
+      times: null
 
   - name: "BLS – Pakistan → Spain – Islamabad"
     provider: bls
@@ -56,7 +85,9 @@ monitors:
     login_url: "https://appointment.thespainvisa.com/Global/account/login"
     start_url: "https://appointment.thespainvisa.com/Global/appointment/newappointment"
     booking_url: "https://appointment.thespainvisa.com/Global/account/login"
-    interval_minutes: 15
+    interval_minutes: 30               # the client's account: slow and daytime only
+    active_hours: "07:00-23:00"
+    report_every_check: true
     steps:
       - select: {index: 0, option: "Islamabad"}
       - select: {index: 1, option: "Schengen"}

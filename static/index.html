@@ -60,7 +60,7 @@ button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
 button.danger{color:var(--bad)}
 button:disabled{opacity:.45;cursor:not-allowed}
 .note{font-size:12px;background:var(--warn-soft);color:var(--warn);padding:8px 10px;border-radius:8px}
-.grid2{display:grid;grid-template-columns:1fr 1.25fr;gap:14px}
+.grid2{display:grid;grid-template-columns:1fr;gap:14px}
 .console{background:var(--console);color:var(--console-ink);border-radius:12px;padding:12px 14px;height:360px;overflow:auto;font:12px/1.6 "JetBrains Mono",monospace}
 .console .t{color:#64748b;margin-right:8px}
 .console .ok{color:#34d399}.console .warn{color:#fbbf24}.console .error{color:#f87171}
@@ -69,7 +69,12 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
 th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-weight:600}
 td.r{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+td.d{white-space:normal;min-width:220px;color:var(--muted)}
+td.d b{color:var(--ink);font-weight:500}
 .tag{font-weight:600}.tag.available{color:var(--ok)}.tag.none{color:var(--muted)}.tag.unknown,.tag.login_required{color:var(--warn)}
+.tag.login_failed,.tag.blocked{color:var(--bad)}
+.slot.bad{background:var(--bad-soft)}.slot.bad .val{color:var(--bad)}
+.auto{font-size:12px;color:var(--muted)}
 a{color:var(--brand)}
 .empty{color:var(--muted);padding:20px;text-align:center}
 @media (max-width:820px){.stats{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.routes{grid-template-columns:1fr}header{padding:12px 16px}}
@@ -84,7 +89,7 @@ a{color:var(--brand)}
 <main>
   <section class="stats">
     <div class="stat"><span>Active routes</span><b id="st-active">0</b></div>
-    <div class="stat"><span>Checks (recent)</span><b id="st-checks">0</b></div>
+    <div class="stat"><span>Runs (recent)</span><b id="st-checks">0</b></div>
     <div class="stat"><span>Slots found</span><b id="st-found">0</b></div>
     <div class="stat"><span>Last check</span><b id="st-last" style="font-size:18px">—</b></div>
   </section>
@@ -93,15 +98,22 @@ a{color:var(--brand)}
   <section class="routes" id="routes"></section>
 
   <section class="grid2">
-    <div><h2>Live activity</h2><div class="console" id="console"></div></div>
-    <div><h2>Check history</h2><div class="tablewrap"><table>
-      <thead><tr><th>Time</th><th>Route</th><th>Result</th><th>Next slot</th><th></th></tr></thead>
+    <div><h2>Run log</h2><div class="tablewrap"><table>
+      <thead><tr><th>Time</th><th>Route</th><th>Status</th><th>Next slot</th><th>What happened</th><th></th></tr></thead>
       <tbody id="history"></tbody></table></div></div>
+    <div><h2>Live activity</h2><div class="console" id="console"></div></div>
   </section>
 </main>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const RESULT = {available:"Slot available",none:"No slots",login_required:"Login needed",login_failed:"Login failed",unknown:"Not recognised",blocked:"Blocked"};
+function what(h){
+  const bits = [];
+  if (h.note) bits.push(`<b>${esc(h.note)}</b>`);
+  if (h.detail && h.status!=="login_required") bits.push(esc(h.detail.length>170 ? h.detail.slice(0,170)+"…" : h.detail));
+  return bits.join(" · ") || "—";
+}
 const LABEL = {stopped:"Stopped",starting:"Starting…",waiting_login:"Waiting for login",running:"Monitoring",checking:"Checking portal…"};
 let pinnedBottom = true;
 $("#console").addEventListener("scroll", e => { const c=e.target; pinnedBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 30; });
@@ -112,6 +124,8 @@ function slotBox(r){
   if(!r.result) return `<div class="slot none"><div class="lbl">Next available slot</div><div class="val">No check yet</div></div>`;
   if(r.result==="available") return `<div class="slot ok"><div class="lbl">Next available slot</div><div class="val">${esc(r.earliest)}${r.times.length?` · ${esc(r.times.join(", "))}`:""}</div></div>`;
   if(r.result==="none") return `<div class="slot none"><div class="lbl">Next available slot</div><div class="val">No slots available right now</div></div>`;
+  if(r.result==="login_failed") return `<div class="slot bad"><div class="lbl">Status</div><div class="val">Automatic login failed — see the run log</div></div>`;
+  if(r.result==="blocked") return `<div class="slot bad"><div class="lbl">Status</div><div class="val">The portal refused us — stopped</div></div>`;
   if(r.result==="login_required") return `<div class="slot warn"><div class="lbl">Status</div><div class="val">Session expired — log in again</div></div>`;
   return `<div class="slot warn"><div class="lbl">Status</div><div class="val">Page not recognised — needs review</div></div>`;
 }
@@ -122,7 +136,8 @@ function card(r){
     <div class="top"><div><div class="name">${esc(r.name)}</div><div class="meta">${esc(r.provider)} · ${esc(r.category)}</div></div>
       <span class="pill s-${r.status}"><i></i>${LABEL[r.status]||r.status}</span></div>
     ${slotBox(r)}
-    ${r.status==="waiting_login"?`<div class="note">Signing in with the login from .env. If the portal shows a CAPTCHA or asks for an OTP, complete it in the Chrome window — monitoring starts by itself once you're in.</div>`:""}
+    ${r.status==="waiting_login"&&!r.auto_login?`<div class="note">Signing in with the login from .env. If the portal shows a CAPTCHA or asks for an OTP, complete it in the Chrome window — monitoring starts by itself once you're in.</div>`:""}
+    ${r.auto_login?`<div class="auto">Automatic login is on: each run signs in with the login from .env and the emailed code, then reads the slot.${r.active_hours?` Runs only between ${esc(r.active_hours.replace('-',' and '))}.`:""}</div>`:""}
     <div class="row"><span>Last check <b>${esc(r.last_check||"—")}</b></span><span>Next check in <b class="cd" data-id="${r.id}">—</b></span>
       <span>Every <b>${r.interval_min||"—"} min</b></span>${r.last_alert?`<span>Last alert <b>${esc(r.last_alert)}</b></span>`:""}</div>
     <div class="btns">
@@ -157,9 +172,10 @@ async function refresh(){
     if (lh !== lastLogHtml) { c.innerHTML = lh; lastLogHtml = lh; }
     if(pinnedBottom) c.scrollTop = c.scrollHeight;
     const hh = d.history.length ? d.history.map(h=>`<tr><td>${esc(h.ts.replace("T"," "))}</td><td class="r" title="${esc(h.monitor)}">${esc(h.monitor)}</td>
-      <td><span class="tag ${esc(h.status)}">${esc(h.status.replace("_"," "))}</span></td><td>${esc(h.earliest||"—")}</td>
-      <td>${h.screenshot?`<a target="_blank" href="/screenshots/${encodeURIComponent(h.screenshot)}">view</a>`:""}</td></tr>`).join("")
-      : `<tr><td colspan="5" class="empty">No checks yet</td></tr>`;
+      <td><span class="tag ${esc(h.status)}">${esc(RESULT[h.status]||h.status.replace("_"," "))}</span></td><td>${esc(h.earliest||"—")}</td>
+      <td class="d" title="${esc(h.detail||"")}">${what(h)}</td>
+      <td>${h.screenshot?`<a target="_blank" href="/screenshots/${encodeURIComponent(h.screenshot)}">screenshot</a>`:""}</td></tr>`).join("")
+      : `<tr><td colspan="6" class="empty">No runs yet</td></tr>`;
     if (hh !== lastHistHtml) { $("#history").innerHTML = hh; lastHistHtml = hh; }
   }catch(e){ $("#livedot").classList.add("off"); $("#livetxt").textContent = "Disconnected"; }
 }

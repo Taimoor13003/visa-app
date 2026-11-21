@@ -17,6 +17,7 @@ from typing import Pattern
 AVAILABLE = "available"
 NONE = "none"
 LOGIN_REQUIRED = "login_required"
+LOGIN_FAILED = "login_failed"   # the automatic login did not get in; `detail` says at which step and why
 BLOCKED = "blocked"          # portal warned us (rate limit / access denied) → monitor pauses itself
 UNKNOWN = "unknown"
 

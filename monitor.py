@@ -18,7 +18,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -28,7 +28,7 @@ from playwright.sync_api import BrowserContext, Error as PWError, Page, TimeoutE
 import notify
 import store
 from scrapers import SITES
-from scrapers.base import AVAILABLE, BLOCKED, LOGIN_REQUIRED, NONE, UNKNOWN, SlotResult
+from scrapers.base import AVAILABLE, BLOCKED, LOGIN_FAILED, LOGIN_REQUIRED, NONE, UNKNOWN, SlotResult
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")    # before the settings below are read
@@ -48,8 +48,9 @@ NAV_TIMEOUT_MS = 60_000       # VFS can take a long time to answer
 EMAIL_SEL = ("input[type=email], input[name*=email i], input[id*=email i], "
              "input[formcontrolname*=user i], input[name*=user i], input[id*=user i]")
 PASSWORD_SEL = "input[type=password]"
+# CaptchaData: BLS's own picture CAPTCHA. Its page fills this hidden field when a person has passed it.
 CAPTCHA_TOKEN_SEL = ", ".join(f"[name='{n}']" for n in
-                              ("cf-turnstile-response", "g-recaptcha-response", "h-captcha-response"))
+                              ("cf-turnstile-response", "g-recaptcha-response", "h-captcha-response", "CaptchaData"))
 CAPTCHA_WIDGET_SEL = ("iframe[src*=captcha i], iframe[title*=captcha i], img[src*=captcha i], "
                       "img[id*=captcha i], [id*=captcha i], [class*=captcha i]")
 SUBMIT_RE = re.compile(r"^\s*(sign ?in|log ?in|login|submit|continue)\s*$", re.I)
@@ -131,6 +132,12 @@ def credentials(mon: dict) -> tuple[str, str] | None:
     return (email, pw) if email and pw else None
 
 
+# BLS Indonesia (indonesia.blsspainglobal.com/Global/account/login, seen in Chrome 2026-11-21): ONE page
+# with ten "UserId<n>" and ten "Password<n>" inputs of which one each is visible, <button id="btnVerify">
+# that opens the picture CAPTCHA, and a hidden <button id="btnSubmit">Login</button>. When a person passes
+# the CAPTCHA the page hides Verify, shows Login and fills the hidden input CaptchaData. The script types
+# the email and password, waits for CaptchaData, then presses Login. It never presses Verify.
+#
 # BLS (appointment.thespainvisa.com/Global/account/login, seen 2026-11-19): step one renders ten
 # <input class="form-control entry-disabled" type="text"> with random ids, all labelled "Email";
 # random CSS classes hide nine, so the real field is the single *visible* one. The button is
@@ -247,11 +254,14 @@ def submit_login(page: Page) -> None:
 
 
 def login_error(page: Page) -> str:
+    """The first visible error message on the login form, or "". A bare mark such as the red "*"
+    VFS puts beside a mandatory field (span.c-brand-error) is not a message."""
     try:
-        return page.locator(".alert-danger, .invalid-feedback, .mat-error, mat-error, [class*=error i]") \
-            .first.inner_text(timeout=1000).strip()[:200]
+        texts = page.locator(".alert-danger, .invalid-feedback, .mat-error, mat-error, [class*=error i]") \
+            .locator("visible=true").all_inner_texts()
     except Exception:  # noqa: BLE001
         return ""
+    return next((t.strip()[:200] for t in texts if re.search(r"[^\W\d_]{3}", t)), "")
 
 
 def wait_past_challenge(page: Page, timeout_s: int = 60) -> bool:
@@ -400,6 +410,13 @@ def check(page: Page, mon: dict) -> tuple[SlotResult, Path | None]:
 #   - on any block or logged-out page it stops and tells the operator; it never retries by itself
 # Details and the evidence behind each rule: VFS_PLAN.md.
 INPAGE_MIN_INTERVAL_MIN = 15
+# Routes with `auto_login: true` (autologin.py). VFS ends a login 30 minutes after it started, however
+# active the tab is (measured 2026-11-20), and shows a blocking reminder from minute 25. So a login
+# older than this is not used for another check: the run starts with a fresh login instead.
+SESSION_REUSE_MAX_MIN = 24
+MAX_LOGIN_FAILURES = 2        # automatic logins that may fail in a row before the route stops itself
+MAX_CHECKS_PER_LOGIN = 3      # looks at the slot on one login (checks_per_login in config.yaml)
+LAST_RECHECK_MAX_MIN = 22     # the last look on a login starts no later than this: the portal's reminder covers the page at 25
 CENTRE_SEL = "mat-select[formcontrolname=centerCode]"
 SUBCAT_SEL = "mat-select[formcontrolname=visaCategoryCode]"
 CATEGORY_SEL = "mat-select:not([formcontrolname=centerCode]):not([formcontrolname=visaCategoryCode])"
@@ -434,8 +451,16 @@ def find_route_page(ctx: BrowserContext, mon: dict) -> Page | None:
     return next((p for p in ctx.pages if p.url.lower().startswith(base)), None)
 
 
+def auto_login_on(mon: dict) -> bool:
+    return bool(mon.get("auto_login") and mon.get("inpage")) and not MANUAL_LOGIN
+
+
 def wait_for_attached_page(ctx: BrowserContext, mon: dict) -> Page:
     name = mon["name"]
+    if auto_login_on(mon):  # the monitor logs in by itself: any tab of the route will do, or a new one
+        page = find_route_page(ctx, mon) or ctx.new_page()
+        print(f"[{name}] automatic login is on; using the tab at {page.url}")
+        return page
     while True:
         page = find_route_page(ctx, mon)
         if page is None:
@@ -527,6 +552,10 @@ def check_inpage(page: Page, mon: dict, repick: bool = True) -> tuple[SlotResult
         marker = cfg.get("url_marker", "application-detail")
         if marker not in page.url:
             start = page.get_by_role("button", name=cfg.get("open", "Start New Booking")).locator("visible=true")
+            try:  # straight after a login the dashboard is still drawing
+                start.first.wait_for(state="visible", timeout=15_000)
+            except PWError:
+                pass
             if not start.count():
                 return SlotResult(UNKNOWN, detail=f"error: not on the booking form and no way to it (on {page.url})"), None
             start.first.click()
@@ -576,6 +605,43 @@ def slot_message(mon: dict, r: SlotResult) -> tuple[str, str]:
     return subject, body
 
 
+REPORT_WORDS = {AVAILABLE: ("✅ Slot available", "A slot is available"),
+                NONE: ("No slot right now", "No slot is available right now"),
+                UNKNOWN: ("⚠️ Slot not readable", "The page could not be read this time"),
+                LOGIN_REQUIRED: ("🔑 Login needed", "The portal asked for a login"),
+                LOGIN_FAILED: ("⚠️ Login failed", "The automatic login did not get in"),
+                BLOCKED: ("⛔ Blocked", "The portal refused the visit")}
+
+
+def report_message(mon: dict, r: SlotResult, note: str = "") -> tuple[str, str]:
+    """The status mail for one check (routes with report_every_check): what the run found, slot or not."""
+    head, line = REPORT_WORDS.get(r.status, (r.status, r.status))
+    subject = f"{head}{' ' + r.earliest if r.earliest else ''}: {mon['name']}"
+    rows = [f"Route: {mon['name']}", f"Category: {mon.get('category', '-')}",
+            f"Checked: {datetime.now():%d-%m-%Y %H:%M}", f"Result: {line}"]
+    if r.earliest:
+        rows.append("Next available slot: " + r.earliest + (f" — times: {', '.join(r.times)}" if r.times else ""))
+    if r.detail:
+        rows.append(f"{'Reason' if r.status == LOGIN_FAILED else 'The portal showed'}: {r.detail[:300]}")
+    if note:
+        rows.append(f"How this run got in: {note}")
+    if r.status == AVAILABLE:
+        rows.append(f"Book here: {mon.get('booking_url', mon['start_url'])}")
+    return subject, "\n".join(rows)
+
+
+def parse_hours(text) -> tuple[int, int] | None:
+    """ "07:00-23:00" → (420, 1380). None for nothing, nonsense, or equal ends (= always active)."""
+    m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})\s*", str(text or ""))
+    if not m:
+        return None
+    h1, m1, h2, m2 = map(int, m.groups())
+    if h1 > 23 or h2 > 24 or m1 > 59 or m2 > 59 or (h2 == 24 and m2):
+        return None
+    start, end = h1 * 60 + m1, (h2 * 60 + m2) % 1440
+    return None if start == end else (start, end)
+
+
 class Monitor:
     """One route: runs a check, keeps the latest result, decides which alerts to send."""
 
@@ -592,6 +658,21 @@ class Monitor:
         self.last_shot: Path | None = None
         self.last_ts: datetime | None = None
         self.last_alert_ts: datetime | None = None
+        self.login_ts = 0.0            # when the automatic login last got in (0 = not by us / unknown)
+        self.login_failures = 0        # automatic logins failed in a row
+        self.note = ""                 # how the current run got in; stored with its history row
+        self.fresh_login = False       # this run began with a login of its own
+        # Auto-login routes may look again on the same login instead of logging in for every look.
+        n = int(mon.get("checks_per_login", 1)) if auto_login_on(mon) else 1
+        self.checks_per_login = min(max(n, 1), MAX_CHECKS_PER_LOGIN)
+        gap = max(float(mon.get("recheck_minutes", 15)), MIN_INTERVAL_MIN)
+        self.recheck_s = min(gap, LAST_RECHECK_MAX_MIN / max(self.checks_per_login - 1, 1)) * 60
+        self.login_checks = 0          # looks done in the current cycle
+        self.active = parse_hours(mon.get("active_hours"))  # (start, end) in minutes of the day, or None
+        if mon.get("active_hours") and not self.active:
+            log(f"[{mon['name']}] active_hours {mon['active_hours']!r} not understood (use e.g. \"07:00-23:00\"); ignored")
+        self.manual = False            # the next run was asked for by a person: active hours do not hold it
+        self.cycle_start = 0.0         # when the current cycle (login + its looks) began
         self.login_filled = False      # dashboard login state machine (engine.py)
         self.login_submitted = False
         self.captcha_logged = False
@@ -600,9 +681,103 @@ class Monitor:
 
     def _check(self) -> SlotResult:
         r, shot = check(self.page, self.mon)
-        store.record(self.mon["name"], r, shot)
+        store.record(self.mon["name"], r, shot, self.note)
         self.last, self.last_shot, self.last_ts = r, shot or self.last_shot, datetime.now()
         return r
+
+    def further_look_due(self) -> bool:
+        """The next run is another look on the login this cycle began with (it never logs in)."""
+        return bool(self.login_ts and 0 < self.login_checks < self.checks_per_login)
+
+    def quiet_wait(self, at: float | None = None) -> float:
+        """Seconds from `at` (default now) until the route's active hours begin; 0 inside them or when
+        none are set. Hours are on this computer's clock; the end is exclusive; they may pass midnight."""
+        if not self.active:
+            return 0.0
+        start, end = self.active
+        t = datetime.fromtimestamp(at if at is not None else time.time())
+        minute = t.hour * 60 + t.minute
+        inside = start <= minute < end if start < end else (minute >= start or minute < end)
+        if inside:
+            return 0.0
+        opens = t.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
+        if opens <= t:
+            opens += timedelta(days=1)
+        return (opens - t).total_seconds()
+
+    def hold_for_quiet_hours(self) -> bool:
+        """Call when a run is due. True = it would begin a new cycle outside the active hours: the run
+        is moved to the start of the hours and nothing happens now. A look on a login already made,
+        and a run a person asked for, are never held."""
+        if self.manual or self.further_look_due():
+            return False
+        wait = self.quiet_wait()
+        if wait <= 0:
+            return False
+        self.next_run = time.time() + wait
+        self.log(f"[{self.mon['name']}] outside the active hours ({self.mon['active_hours']}) — "
+                 f"next run at {datetime.fromtimestamp(self.next_run):%H:%M}")
+        return True
+
+    def next_delay(self) -> float:
+        """Seconds until the next run. With checks_per_login > 1 the further looks come recheck_minutes
+        apart, counted from the login; the next login comes one interval after the last cycle began.
+        A run that would begin a new cycle outside the active hours moves to their start."""
+        delay = self.interval
+        if self.checks_per_login > 1 and not self.halted:
+            if self.further_look_due():
+                return max(30.0, self.login_ts + self.login_checks * self.recheck_s - time.time())
+            if self.cycle_start:
+                delay = max(60.0, self.cycle_start + self.interval - time.time())
+        return delay + self.quiet_wait(time.time() + delay)
+
+    def _report(self, r: SlotResult) -> None:
+        """Routes with report_every_check: mail what this check found, whether there is a slot or not."""
+        if self.mon.get("report_every_check"):
+            subject, body = report_message(self.mon, r, self.note)
+            notify.send(subject, body, self.last_shot if r.status == AVAILABLE else None)
+
+    def _ensure_login(self, force: bool = False, reuse_only: bool = False) -> bool:
+        """Auto-login routes: make sure the tab holds a login that will last through this run.
+        True = go on with the check. False = the login failed; the run is recorded and over.
+        reuse_only=True (a further look on the same login) never logs in: False when the login is gone."""
+        name, page = self.mon["name"], self.page
+        self.fresh_login = False
+        age_min = (time.time() - self.login_ts) / 60 if self.login_ts else None
+        on_login = is_login_page(page)
+        if not force and not on_login and not block_reason(page) and (age_min is None or age_min < SESSION_REUSE_MAX_MIN):
+            self.note = f"login from {age_min:.0f} min ago still active" if age_min is not None else "already logged in"
+            return True
+        if reuse_only:
+            self.log(f"[{name}] the login is no longer usable for another look — next login at the scheduled time")
+            return False
+        import autologin  # here, not at the top: autologin imports this module
+        if not on_login and age_min is not None:
+            self.log(f"[{name}] the login is {age_min:.0f} min old (the portal ends it at 30) — logging in again")
+        else:
+            self.log(f"[{name}] not logged in — logging in automatically")
+        ok, how = autologin.full_login(page, self.mon, say=lambda msg: self.log(f"[{name}] login: {msg}"),
+                                       fresh=not on_login)
+        if ok:
+            self.login_ts, self.login_failures, self.login_alerted = time.time(), 0, False
+            self.note, self.fresh_login = how, True
+            return True
+        self.login_ts = 0.0
+        self.login_failures += 1
+        r = SlotResult(LOGIN_FAILED, detail=how)
+        store.record(name, r, None, "automatic login")
+        self.last, self.last_ts = r, datetime.now()
+        self._report(r)
+        self.log(f"[{name}] login_failed — {how[:200]}")
+        reason = how.split(":", 1)[0]
+        if reason in autologin.HALTING or reason in ("no_login", "no_mailbox"):
+            self._halt(f"⛔ Automatic login stopped: {name}", f"The automatic login failed ({how})")
+        elif self.login_failures >= MAX_LOGIN_FAILURES:
+            self._halt(f"⛔ Automatic login stopped: {name}",
+                       f"The automatic login failed {self.login_failures} times in a row (last: {how})")
+        else:
+            self.log(f"[{name}] will try once more at the next scheduled check")
+        return False
 
     def _halt(self, subject: str, detail: str) -> None:
         self.halted = True
@@ -614,9 +789,35 @@ class Monitor:
         name = self.mon["name"]
         if self.halted:
             return
+        auto = auto_login_on(self.mon)
+        self.note, self.fresh_login = "", False
+        # A further look on the login this cycle began with? It never logs in again by itself.
+        again = bool(auto and self.further_look_due())
+        if not again:
+            self.cycle_start, self.login_checks = time.time(), 0
+        if auto and not self._ensure_login(reuse_only=again):
+            self.login_checks = self.checks_per_login if again else 0
+            return
         r = self._check()
+        self.login_checks += 1
+        # An older login that the portal ended, or whose page is covered by its session reminder,
+        # cannot be read. Once per run: log in afresh and read again.
+        stuck = r.status == UNKNOWN and r.detail.startswith(("error", "timeout"))
+        if again and (r.status == LOGIN_REQUIRED or stuck):
+            self.log(f"[{name}] {r.status} on the further look ({r.detail[:80]}) — the login ended early; "
+                     f"next login at the scheduled time")
+            self.login_checks = self.checks_per_login  # login_ts stays: by the next cycle it is too old to reuse
+            self._report(r)
+            return
+        if auto and not self.fresh_login and (r.status == LOGIN_REQUIRED or stuck):
+            self.log(f"[{name}] {r.status} on the older login ({r.detail[:80]}) — starting over with a fresh login")
+            if not self._ensure_login(force=True):
+                return
+            r = self._check()
         extra = f" — {r.detail[:120]}" if r.status == UNKNOWN and r.detail.startswith(("error", "timeout")) else ""
         self.log(f"[{name}] {r.status} {r.earliest or ''} {' '.join(r.times)}".rstrip() + extra)
+        if not (r.status == AVAILABLE and r.key() != self.last_alert_key):
+            self._report(r)  # a slot seen for the first time is told by its alert below, after the confirmation
 
         if r.status == BLOCKED:
             self._halt(f"⛔ Portal blocked us: {name}", f"The portal says: {r.detail}")
@@ -656,11 +857,15 @@ class Monitor:
             r2 = self._check()
         if r2.status != AVAILABLE:
             self.log(f"[{name}] not confirmed on re-check ({r2.status}); no alert sent")
+            self._report(r2)
             return
         subject, body = slot_message(self.mon, r2)
-        notify.send(subject, body, self.last_shot)
+        sent = notify.send(subject, body, self.last_shot)
         self.last_alert_key, self.last_alert_ts = r2.key(), datetime.now()
-        self.log(f"[{name}] ALERT SENT: next slot {r2.earliest} {' '.join(r2.times)}".rstrip())
+        if sent == 0:
+            self.log(f"[{name}] slot confirmed ({r2.earliest}) — no alert recipients are set up, so nobody was told")
+        else:
+            self.log(f"[{name}] ALERT SENT: next slot {r2.earliest} {' '.join(r2.times)}".rstrip())
 
 
 # ---------------------------------------------------------------- entry point
@@ -730,9 +935,9 @@ def main() -> None:
         while True:
             now = time.time()
             for m in mons:
-                if now >= m.next_run:
+                if now >= m.next_run and not m.hold_for_quiet_hours():
                     m.tick()
-                    m.next_run = time.time() + m.interval
+                    m.next_run = time.time() + m.next_delay()
             time.sleep(5)
 
 

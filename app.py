@@ -53,7 +53,7 @@ def index():
 
 @app.get("/api/state")
 def state():
-    return jsonify({**engine.snapshot(), "history": store.recent(40)})
+    return jsonify({**engine.snapshot(), "history": store.recent(100)})
 
 
 @app.post("/api/routes/<int:idx>/<action>")

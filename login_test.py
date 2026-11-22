@@ -9,13 +9,14 @@ from .env, waits for the portal's Cloudflare check to pass on its own and presse
 
 One attempt only: it never retries and never touches the Cloudflare box. See autologin.py.
 
-Usage:  python login_test.py "Indonesia" [--credentials VFS] [--with-code]
+Usage:  python login_test.py "vfs pakistan" [--credentials VFS] [--with-code] [--cdp-port 9222]
         (--credentials = the <PREFIX> of <PREFIX>_EMAIL / <PREFIX>_PASSWORD in .env; default is
         the route's `credentials` key). Log: debug/login_test.log
 """
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from datetime import datetime
 
@@ -42,9 +43,14 @@ def main() -> None:
     ap.add_argument("--credentials", help="<PREFIX> of <PREFIX>_EMAIL / <PREFIX>_PASSWORD in .env")
     ap.add_argument("--with-code", action="store_true", help="read the emailed code from the mailbox and enter it")
     ap.add_argument("--wait-code", type=int, default=5, help="minutes to keep watching for you to type the code")
+    ap.add_argument("--cdp-port", type=int, metavar="PORT",
+                    help="same as BROWSER_CDP_URL=http://127.0.0.1:PORT in .env")
     args = ap.parse_args()
+    if args.cdp_port:
+        os.environ["BROWSER_CDP_URL"] = f"http://127.0.0.1:{args.cdp_port}"
+    words = args.route.lower().split()  # words that together pick one route, e.g. "vfs pakistan"
     routes = [m for m in yaml.safe_load((monitor.ROOT / "config.yaml").read_text(encoding="utf-8"))["monitors"]
-              if args.route.lower() in m["name"].lower()]
+              if all(w in m["name"].lower() for w in words)]
     if len(routes) != 1:
         raise SystemExit(f"{args.route!r} matches {len(routes)} routes")
     mon = {**routes[0], "credentials": args.credentials or routes[0].get("credentials")}

@@ -18,6 +18,8 @@ monitors:
     provider: vfs
     profile: vfs                       # browser profile folder (keeps the login session)
     credentials: VFS                   # reads VFS_EMAIL / VFS_PASSWORD from .env
+    auto_login: true                   # each run signs in by itself and reads the emailed code (autologin.py);
+                                       # needs OTP_IMAP_PASSWORD in .env. Remove this line to log in by hand.
     category: "Short stay (Schengen) – Tourism"
     login_url: "https://visa.vfsglobal.com/pak/en/nld/login"
     start_url: "https://visa.vfsglobal.com/pak/en/nld/dashboard"     # only works once logged in
@@ -28,7 +30,10 @@ monitors:
     # are used here; if one is wrong the check stops and lists the real options. Seen live on
     # 2026-11-19: centre "Netherlands Karachi", category "Schengen Visa", sub-categories
     # "Family And Friends Visit" and Tourism.
-    interval_minutes: 20
+    interval_minutes: 120              # the client's account: one login and one code mail every 2 hours
+    checks_per_login: 2
+    recheck_minutes: 20
+    active_hours: "07:00-23:00"
     inpage:
       centre: "Islamabad"
       category: "Schengen Visa"

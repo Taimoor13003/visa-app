@@ -67,7 +67,7 @@ in Pakistan; everything else can be driven remotely through the dashboard.
 
 Without the dashboard, the same first run from a terminal:
 ```bash
-python monitor.py --inspect VFS      # or: --inspect BLS   (any unique part of the route name)
+python monitor.py --inspect "vfs pakistan"   # or: --inspect "bls pakistan"  (words that pick one route)
 python monitor.py --inspect VFS --manual-login   # you log in by hand; the script only reads the page after
 ```
 It logs in, runs the steps once, prints the result and saves `debug/page.txt`, `debug/page.html`

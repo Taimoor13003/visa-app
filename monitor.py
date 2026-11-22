@@ -908,9 +908,11 @@ def main() -> None:
         return
 
     monitors = [m for m in yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))["monitors"] if m.get("enabled", True)]
-    if args.inspect:  # exact name, or a unique part of it (e.g. --inspect VFS) — easier to type on Windows
+    if args.inspect:  # exact name, or words that together pick one route (e.g. --inspect "bls pakistan"):
+        # the names contain – and →, which are awkward to type in a Windows terminal
         exact = [m for m in monitors if m["name"] == args.inspect]
-        monitors = exact or [m for m in monitors if args.inspect.lower() in m["name"].lower()]
+        words = args.inspect.lower().split()
+        monitors = exact or [m for m in monitors if all(w in m["name"].lower() for w in words)]
         if len(monitors) != 1:
             raise SystemExit(f"--inspect {args.inspect!r} matches {len(monitors)} routes; use one of: "
                              + ", ".join(repr(m["name"]) for m in yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))["monitors"]))

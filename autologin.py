@@ -31,7 +31,9 @@ CODE_BOX = "input[formcontrolname=otp i], input[id=otp i], input[name=otp i]"
 NECESSARY_ONLY_SEL = "#onetrust-reject-all-handler"  # the banner's "Accept Only Necessary" button
 INACTIVE_RE = re.compile(r"account is (?:currently )?(?:inactive|not (?:yet )?activ\w*)", re.I)
 REFUSED_RE = re.compile(r"invalid (?:credentials|e-?mail|user ?name|password)|incorrect (?:e-?mail|user ?name|password)"
-                        r"|account (?:is|has been) (?:locked|blocked|disabled|suspended)", re.I)
+                        r"|account (?:is|has been) (?:locked|blocked|disabled|suspended)"
+                        # live 22-11-2026 (Pakistan): "The entered email id is not registered with us. Please check…"
+                        r"|e-?mail(?: id| address)? is not registered[^.]*", re.I)
 HALTING = ("blocked", "rejected", "inactive", "code_rejected")   # the portal said no: a person must look before any retry
 PRESSED: dict[int, datetime] = {}                    # page id → when Sign In was pressed (the code mail comes after)
 

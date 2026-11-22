@@ -920,7 +920,12 @@ def main() -> None:
     ap.add_argument("--test-alert", action="store_true")
     ap.add_argument("--manual-login", action="store_true",
                     help="type nothing into the login form; a person logs in, then the script reads the slots")
+    ap.add_argument("--cdp-port", type=int, metavar="PORT",
+                    help="attach to the Chrome started with --remote-debugging-port=PORT on this machine "
+                         "(same as BROWSER_CDP_URL=http://127.0.0.1:PORT in .env)")
     args = ap.parse_args()
+    if args.cdp_port:
+        os.environ["BROWSER_CDP_URL"] = f"http://127.0.0.1:{args.cdp_port}"
     global MANUAL_LOGIN
     MANUAL_LOGIN = args.manual_login
 

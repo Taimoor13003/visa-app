@@ -192,6 +192,20 @@ def block_reason(page: Page) -> str:
     return ""
 
 
+def portal_error(page: Page) -> str:
+    """The portal's own "something went wrong" page (BLS: /Home/Error?errorId=…), or "".
+    Seen on BLS Pakistan 2026-11-22 for every address, the login page included, in the script's
+    browser and in an ordinary Chrome alike: the fault is the portal's, and no step can work on it."""
+    if "/home/error" not in page.url.lower():
+        return ""
+    try:
+        body = " ".join(page.inner_text("body", timeout=1000).split())
+    except Exception:  # noqa: BLE001
+        body = ""
+    m = re.search(r"something went wrong.{0,160}", body, re.I)
+    return "the portal shows its own error page" + (f" ({m.group(0).strip()})" if m else "")
+
+
 def rate_limited(page: Page) -> bool:
     return block_reason(page).startswith("Too Many Requests")
 
@@ -283,8 +297,13 @@ def open_start(page: Page, mon: dict) -> bool:
 
 
 def wait_for_manual_login(page: Page, mon: dict) -> None:
-    if not open_start(page, mon) or is_login_page(page):
+    opened = open_start(page, mon)
+    broken = opened and portal_error(page)  # neither a login page nor a logged-in one: try the login page once
+    if not opened or broken or is_login_page(page):
         go_to_login(page, mon)
+        if broken and portal_error(page):
+            raise SystemExit(f"[{mon['name']}] {portal_error(page)} on the login page too. "
+                             f"Nothing was typed. Try again later; reloading now only adds requests.")
         filled, last_url, n = False, None, 0
         has_creds = credentials(mon) is not None
         for _ in range(90):  # two-step logins: email → Verify → password page (up to ~90 s)
@@ -379,6 +398,8 @@ def check(page: Page, mon: dict) -> tuple[SlotResult, Path | None]:
             return SlotResult(LOGIN_REQUIRED, detail="Cloudflare check page — operator must clear it"), None
         if is_login_page(page):
             return SlotResult(LOGIN_REQUIRED), None
+        if portal_error(page):  # nothing to click on this page; say so instead of timing out on a step
+            return SlotResult(UNKNOWN, detail=f"error: {portal_error(page)}"), screenshot(page, mon)
         run_steps(page, mon.get("steps", []))
         page.wait_for_timeout(3000)
         if is_login_page(page):

@@ -188,6 +188,10 @@ def block_reason(page: Page) -> str:
         return ""
     if "too many requests" in (page.title() + " " + body).lower():
         return "Too Many Requests — this IP is rate-limited. Try again in a few hours"
+    # BLS, live 2026-11-23: after the script submitted the booking form the portal answered with
+    # /Global/account/bot, "Unusual request has been identified. We are suspecting a non-human intervention."
+    if "/account/bot" in page.url.lower() or "non-human intervention" in body.lower():
+        return "the portal says it suspects a non-human visitor (its bot check). Stop; do not retry with this account"
     if VFS_DENIED_RE.match(body) or "access denied" in body.lower()[:300]:
         return f"access denied ({' '.join(body.split())[:80]}). The portal refused this browser or connection"
     return ""
@@ -491,8 +495,17 @@ def check(page: Page, mon: dict) -> tuple[SlotResult, Path | None]:
             return SlotResult(LOGIN_REQUIRED), None
         if portal_error(page):  # nothing to click on this page; say so instead of timing out on a step
             return SlotResult(UNKNOWN, detail=f"error: {portal_error(page)}"), screenshot(page, mon)
-        run_steps(page, mon.get("steps", []))
+        if block_reason(page):
+            return SlotResult(BLOCKED, detail=block_reason(page)), screenshot(page, mon)
+        try:
+            run_steps(page, mon.get("steps", []))
+        except Exception:
+            if block_reason(page):  # a step failed because the portal put its block page in the way
+                return SlotResult(BLOCKED, detail=block_reason(page)), screenshot(page, mon)
+            raise
         page.wait_for_timeout(3000)
+        if block_reason(page):
+            return SlotResult(BLOCKED, detail=block_reason(page)), screenshot(page, mon)
         if is_login_page(page):
             return SlotResult(LOGIN_REQUIRED), None
         site = SITES[mon["provider"]]

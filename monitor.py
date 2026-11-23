@@ -408,7 +408,10 @@ def run_steps(page: Page, steps: list[dict]) -> None:
             page.goto(step["goto"], wait_until="domcontentloaded")
         elif "click" in step or "click_if" in step:
             name = step.get("click") or step["click_if"]
-            target = page.get_by_role("button", name=name).or_(page.get_by_role("link", name=name)) \
+            # exact names only: a loose "Ok" also matches the menu link "Book New Appointment", and the
+            # script clicked that on 2026-11-23, which threw the window back to the CAPTCHA gate
+            target = page.get_by_role("button", name=name, exact=True) \
+                .or_(page.get_by_role("link", name=name, exact=True)) \
                 .or_(page.get_by_text(name, exact=True)).locator("visible=true")
             if "click_if" in step and not target.count():  # e.g. a notice that only sometimes pops up
                 continue

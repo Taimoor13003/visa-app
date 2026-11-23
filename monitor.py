@@ -17,6 +17,7 @@ import argparse
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -296,6 +297,16 @@ def open_start(page: Page, mon: dict) -> bool:
     return wait_past_challenge(page)
 
 
+LOGIN_WAIT_S = 600
+
+
+def _read_line() -> None:
+    try:
+        input()
+    except EOFError:  # no terminal attached: only the page can end the wait
+        threading.Event().wait()
+
+
 def wait_for_manual_login(page: Page, mon: dict) -> None:
     opened = open_start(page, mon)
     broken = opened and portal_error(page)  # neither a login page nor a logged-in one: try the login page once
@@ -339,10 +350,25 @@ def wait_for_manual_login(page: Page, mon: dict) -> None:
             print(f"[{mon['name']}] manual login: type the email and password yourself in the window")
         elif not credentials(mon):
             print(f"[{mon['name']}] no {mon.get('credentials', '<PREFIX>')}_EMAIL/_PASSWORD in .env — type them in the window")
-        input(f"\n>>> [{mon['name']}] Finish the login in the browser window (CAPTCHA / OTP if asked) "
-              f"and wait until the dashboard shows.\n"
+        print(f"\n>>> [{mon['name']}] Finish the login in the browser window (CAPTCHA / OTP if asked).\n"
               f"    If the window is blank or still loading, open {mon.get('login_url', mon['start_url'])} yourself.\n"
-              f"    Then press Enter here... ")
+              f"    The script goes on by itself once the window has left the login page (or press Enter here).",
+              flush=True)
+        entered = threading.Event()  # Enter still works, e.g. when the portal keeps "login" in a logged-in address
+        threading.Thread(target=lambda: (_read_line(), entered.set()), daemon=True).start()
+        for _ in range(LOGIN_WAIT_S):
+            if entered.is_set():
+                break
+            try:
+                if not is_login_page(page) and not portal_error(page) and not block_reason(page):
+                    page.wait_for_timeout(2000)  # let the page after the login settle
+                    print(f"[{mon['name']}] logged in: {page.url}", flush=True)
+                    break
+            except PWError:  # the page is navigating
+                pass
+            page.wait_for_timeout(1000)
+        else:
+            raise SystemExit(f"[{mon['name']}] nobody finished the login within {LOGIN_WAIT_S // 60} minutes.")
 
 
 def kendo_select(page: Page, label: str, option: str) -> bool:

@@ -345,15 +345,47 @@ def wait_for_manual_login(page: Page, mon: dict) -> None:
               f"    Then press Enter here... ")
 
 
+def kendo_select(page: Page, label: str, option: str) -> bool:
+    """Pick `option` in the visible Kendo dropdown whose label contains `label`. False if there is none.
+
+    BLS booking form, read 2026-11-23: every field exists five times under numbered ids (Location1…5) and
+    only one copy of each is shown, a different one on each load. So the dropdown is found by what a
+    person sees: a visible `span.k-dropdown` whose label text matches. Its options live in a separate
+    popup list named by the dropdown's aria-owns."""
+    boxes = page.locator("span.k-widget.k-dropdown").locator("visible=true")
+    for i in range(boxes.count()):
+        box = boxes.nth(i)
+        label_id, list_id = box.get_attribute("aria-labelledby"), box.get_attribute("aria-owns")
+        if not label_id or not list_id:
+            continue
+        if label.lower() not in page.locator(f"[id='{label_id}']").inner_text().lower():
+            continue
+        box.click()
+        items = page.locator(f"[id='{list_id}'] li.k-item")
+        match = items.filter(has_text=option).first
+        try:
+            match.click(timeout=6000)
+        except PWError:
+            seen = [t.strip() for t in items.all_inner_texts()]
+            raise RuntimeError(f"dropdown {label!r} has no option {option!r}; it offers: {seen}") from None
+        return True
+    return False
+
+
 def run_steps(page: Page, steps: list[dict]) -> None:
     """Config-driven navigation: click buttons/links and pick dropdown options by visible text."""
     for step in steps:
         if "goto" in step:
             page.goto(step["goto"], wait_until="domcontentloaded")
-        elif "click" in step:
-            name = step["click"]
-            page.get_by_role("button", name=name).or_(page.get_by_role("link", name=name)) \
-                .or_(page.get_by_text(name)).first.click()
+        elif "click" in step or "click_if" in step:
+            name = step.get("click") or step["click_if"]
+            target = page.get_by_role("button", name=name).or_(page.get_by_role("link", name=name)) \
+                .or_(page.get_by_text(name, exact=True)).locator("visible=true")
+            if "click_if" in step and not target.count():  # e.g. a notice that only sometimes pops up
+                continue
+            target.first.click()
+        elif "select" in step and "label" in step["select"] and kendo_select(page, step["select"]["label"], step["select"]["option"]):
+            pass
         elif "select" in step:
             s = step["select"]
             box = page.get_by_label(s["label"]).first if "label" in s \

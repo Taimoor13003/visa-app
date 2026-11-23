@@ -2,6 +2,7 @@
 #
 # steps: what the script does after login to reach the "earliest slot" message.
 #   - click: "button or link text"
+#   - click_if: "Ok"                                         # click it only if it is showing
 #   - select: {index: 0, option: "visible option text"}   # index = Nth dropdown on page
 #   - select: {label: "Field label", option: "..."}       # or find the dropdown by its label
 #   - wait: 3                                              # seconds
@@ -75,16 +76,20 @@ monitors:
     #   1. "Book New Appointment" opens a picture CAPTCHA first (a person does it), then Submit
     #   2. a form: Category, Individual/Family, location, Visa Type, Visa Sub Type, then Submit; an address popup with "Ok"
     #   3. "Appointment Details": the page lists every day and its status; the script reads that list (scrapers/bls.py)
-    # The select steps for form 2 are still placeholders: its field order and option texts have not been read yet.
+    # Form 2's fields and option texts were read from the live page on 2026-11-23; each field has four hidden decoy copies.
     steps:
       - wait_captcha: 300
       - click: "Submit"
       - wait: 4
-      - select: {index: 0, option: "Jakarta"}
-      - select: {index: 1, option: "Schengen"}
-      - select: {index: 2, option: "Tourist"}
-      - click: "Submit"
-      - wait: 4
+      - select: {label: "Appointment Category", option: "Normal"}      # or Premium
+      - select: {label: "Location", option: "JAKARTA"}
+      - click_if: "Ok"                                                 # "Visa Submission Address" notice
+      - select: {label: "Visa Type", option: "Schengen Visa"}          # or "National Visa/ Long Term Visa"
+      - click_if: "Ok"
+      - select: {label: "Visa Sub Type", option: "Tourist Visa"}
+      - click_if: "Ok"
+      - click: "Submit"                                                # "Appointment For" stays on Individual
+      - wait: 5
     extract:
       dates: null
       times: null

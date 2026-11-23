@@ -5,6 +5,7 @@
 #   - select: {index: 0, option: "visible option text"}   # index = Nth dropdown on page
 #   - select: {label: "Field label", option: "..."}       # or find the dropdown by its label
 #   - wait: 3                                              # seconds
+#   - wait_captcha: 300                                    # wait for a person to pass the page's CAPTCHA (seconds)
 #   - goto: "https://..."
 # Exact button/option texts must be copied from the live portal. Run
 #   python monitor.py --inspect "<name>"
@@ -65,14 +66,20 @@ monitors:
     credentials: BLS_IDN               # reads BLS_IDN_EMAIL / BLS_IDN_PASSWORD from .env
     category: "Tourist"
     login_url: "https://indonesia.blsspainglobal.com/Global/account/login"
-    start_url: "https://indonesia.blsspainglobal.com/Global/appointment/newappointment"
+    start_url: "https://indonesia.blsspainglobal.com/Global/bls/visatypeverification"   # the menu's "Book New Appointment"
     booking_url: "https://indonesia.blsspainglobal.com/Global/account/login"
     interval_minutes: 30
     active_hours: "07:00-23:00"
     report_every_check: true
-    # The login page was read on 2026-11-21. Everything below is NOT yet seen on a real page (no account yet):
-    # the dropdown texts and the calendar rules are placeholders to confirm with `python monitor.py --inspect "BLS – Indonesia"`.
+    # Seen with a real account on 2026-11-23:
+    #   1. "Book New Appointment" opens a picture CAPTCHA first (a person does it), then Submit
+    #   2. a form: Category, Individual/Family, location, Visa Type, Visa Sub Type, then Submit; an address popup with "Ok"
+    #   3. "Appointment Details": the page lists every day and its status; the script reads that list (scrapers/bls.py)
+    # The select steps for form 2 are still placeholders: its field order and option texts have not been read yet.
     steps:
+      - wait_captcha: 300
+      - click: "Submit"
+      - wait: 4
       - select: {index: 0, option: "Jakarta"}
       - select: {index: 1, option: "Schengen"}
       - select: {index: 2, option: "Tourist"}

@@ -367,6 +367,18 @@ def run_steps(page: Page, steps: list[dict]) -> None:
                 page.get_by_role("option", name=s["option"]).first.click()
         elif "wait" in step:
             page.wait_for_timeout(int(float(step["wait"]) * 1000))
+        elif "wait_captcha" in step:
+            # BLS asks its picture CAPTCHA again before the booking form (/Global/bls/visatypeverification,
+            # seen 2026-11-23): "Verify Selection" opens it, and passing it fills the hidden CaptchaData
+            # field and shows Submit. A person does it in the window; the script only waits for the field.
+            if captcha_state(page) == "pending":
+                print(f">>> complete the CAPTCHA in the browser window (waiting up to {step['wait_captcha']} s)", flush=True)
+                for _ in range(int(step["wait_captcha"])):
+                    if captcha_state(page) != "pending":
+                        break
+                    page.wait_for_timeout(1000)
+                else:
+                    raise PWTimeout(f"the CAPTCHA was not completed within {step['wait_captcha']} s")
         page.wait_for_timeout(int(step.get("pause", 1.5) * 1000))
 
 

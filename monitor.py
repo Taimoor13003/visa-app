@@ -404,8 +404,13 @@ def check(page: Page, mon: dict) -> tuple[SlotResult, Path | None]:
         page.wait_for_timeout(3000)
         if is_login_page(page):
             return SlotResult(LOGIN_REQUIRED), None
+        site = SITES[mon["provider"]]
+        if hasattr(site, "from_date_list"):  # BLS: the page lists every day and its status in a script variable
+            listed = site.from_date_list(page.evaluate(site.DATE_LIST_JS))
+            if listed is not None:
+                return listed, screenshot(page, mon)
         ex = mon.get("extract") or {}
-        result = SITES[mon["provider"]].parse_page(
+        result = site.parse_page(
             page.inner_text("body"), dates=extract(page, ex.get("dates")), times=extract(page, ex.get("times")))
         return result, screenshot(page, mon)
     except Exception as e:  # noqa: BLE001 — one broken monitor must not stop the others

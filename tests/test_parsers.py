@@ -54,3 +54,13 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_bls_date_list():
+    from scrapers import bls
+    day = lambda d, t: {"DateText": d, "AppointmentDateType": t}  # noqa: E731
+    r = bls.from_date_list([day("2026-11-28", 3), day("2026-11-25", 0), day("2026-11-24", 0), day("2026-12-08", 2)])
+    assert r.status == AVAILABLE and r.earliest == "2026-11-24" and "2 open day(s)" in r.detail
+    assert bls.from_date_list([day("2026-11-24", 1), day("2026-11-28", 3)]).status == NONE
+    assert bls.from_date_list(None) is None and bls.from_date_list([]) is None
+    assert bls.from_date_list([{"DateText": "2026-11-24"}]) is None  # unknown shape: fall back to the page text

@@ -82,6 +82,8 @@ monitors:
       - wait_captcha: 300
       - click: "Submit"
       - expect: "Appointment Category"                                 # the booking form has arrived
+      - wait: 2
+      - click_if: "Accept"                                             # "Attention: details must match your passport" notice over the form
       - select: {label: "Appointment Category", option: "Normal"}      # or Premium
       - select: {label: "Location", option: "JAKARTA"}
       - click_if: "Ok"                                                 # "Visa Submission Address" notice

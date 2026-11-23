@@ -403,14 +403,26 @@ def run_steps(page: Page, steps: list[dict]) -> None:
             # BLS asks its picture CAPTCHA again before the booking form (/Global/bls/visatypeverification,
             # seen 2026-11-23): "Verify Selection" opens it, and passing it fills the hidden CaptchaData
             # field and shows Submit. A person does it in the window; the script only waits for the field.
-            if captcha_state(page) == "pending":
+            # Only "done" counts. While the page reloads (a wrong pick resets it) the field is briefly
+            # absent, which is not a pass: on 2026-11-23 the script went on from exactly that moment.
+            if captcha_state(page) != "done":
                 print(f">>> complete the CAPTCHA in the browser window (waiting up to {step['wait_captcha']} s)", flush=True)
                 for _ in range(int(step["wait_captcha"])):
-                    if captcha_state(page) != "pending":
-                        break
+                    try:
+                        if captcha_state(page) == "done":
+                            break
+                    except PWError:  # the page is navigating
+                        pass
                     page.wait_for_timeout(1000)
                 else:
                     raise PWTimeout(f"the CAPTCHA was not completed within {step['wait_captcha']} s")
+        elif "expect" in step:
+            # Wait for a text that proves the next page arrived; if it does not, say what the page shows instead.
+            try:
+                page.get_by_text(step["expect"]).locator("visible=true").first.wait_for(timeout=20000)
+            except PWError:
+                shown = " ".join(page.inner_text("body").split())[:300]
+                raise RuntimeError(f"expected {step['expect']!r} on the page, but it shows: {shown}") from None
         page.wait_for_timeout(int(step.get("pause", 1.5) * 1000))
 
 

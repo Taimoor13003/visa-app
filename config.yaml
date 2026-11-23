@@ -6,6 +6,7 @@
 #   - select: {index: 0, option: "visible option text"}   # index = Nth dropdown on page
 #   - select: {label: "Field label", option: "..."}       # or find the dropdown by its label
 #   - wait: 3                                              # seconds
+#   - expect: "text on the next page"                      # wait for it; fail with what the page shows instead
 #   - wait_captcha: 300                                    # wait for a person to pass the page's CAPTCHA (seconds)
 #   - goto: "https://..."
 # Exact button/option texts must be copied from the live portal. Run
@@ -80,7 +81,7 @@ monitors:
     steps:
       - wait_captcha: 300
       - click: "Submit"
-      - wait: 4
+      - expect: "Appointment Category"                                 # the booking form has arrived
       - select: {label: "Appointment Category", option: "Normal"}      # or Premium
       - select: {label: "Location", option: "JAKARTA"}
       - click_if: "Ok"                                                 # "Visa Submission Address" notice
@@ -89,7 +90,7 @@ monitors:
       - select: {label: "Visa Sub Type", option: "Tourist Visa"}
       - click_if: "Ok"
       - click: "Submit"                                                # "Appointment For" stays on Individual
-      - wait: 5
+      - expect: "Appointment Date"                                     # the Appointment Details page has arrived
     extract:
       dates: null
       times: null

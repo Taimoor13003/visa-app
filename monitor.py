@@ -298,6 +298,7 @@ def open_start(page: Page, mon: dict) -> bool:
 
 
 LOGIN_WAIT_S = 600
+TRACE = False  # --inspect: print every step and every page the window moves to, with the time
 
 
 def _read_line() -> None:
@@ -401,6 +402,8 @@ def kendo_select(page: Page, label: str, option: str) -> bool:
 def run_steps(page: Page, steps: list[dict]) -> None:
     """Config-driven navigation: click buttons/links and pick dropdown options by visible text."""
     for step in steps:
+        if TRACE:
+            print(f"    {datetime.now():%H:%M:%S} step {step}  (on {page.url[:90]})", flush=True)
         if "goto" in step:
             page.goto(step["goto"], wait_until="domcontentloaded")
         elif "click" in step or "click_if" in step:
@@ -416,6 +419,9 @@ def run_steps(page: Page, steps: list[dict]) -> None:
             s = step["select"]
             box = page.get_by_label(s["label"]).first if "label" in s \
                 else page.get_by_role("combobox").nth(s.get("index", 0))
+            if not box.count():  # say where we are instead of waiting 30 s for a field that is not there
+                shown = " ".join(page.inner_text("body").split())[:200]
+                raise RuntimeError(f"no dropdown {s.get('label', s.get('index'))!r} on {page.url}; the page shows: {shown}")
             if box.evaluate("e => e.tagName") == "SELECT":
                 labels = box.locator("option").all_inner_texts()
                 match = next((t for t in labels if s["option"].lower() in t.lower()), s["option"])
@@ -1035,6 +1041,10 @@ def main() -> None:
 
         if args.inspect:
             mon, page = monitors[0], pages[monitors[0]["name"]]
+            global TRACE
+            TRACE = True
+            page.on("framenavigated", lambda f: f == page.main_frame and print(
+                f"    {datetime.now():%H:%M:%S} page -> {f.url[:110]}", flush=True))
             r, shot = check(page, mon)
             DEBUG.mkdir(exist_ok=True)
             (DEBUG / "page.txt").write_text(page.inner_text("body"), encoding="utf-8")
